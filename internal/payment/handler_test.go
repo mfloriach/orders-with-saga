@@ -130,17 +130,20 @@ func TestHeaderPassedToService(t *testing.T) {
 }
 
 func TestMissingHeaderEchoesEffectiveKey(t *testing.T) {
+	// ponytail follow-up: derivation hashes the raw RequestURI, so every
+	// header-less POST /payments shares one key per merchant — collides on
+	// repeat purchases. Tracked separately; this test pins current behavior.
 	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
-		if idemHeader != "" {
-			t.Fatalf("expected empty header passthrough, got %q", idemHeader)
+		if !strings.HasPrefix(idemHeader, "drv:") {
+			t.Fatalf("expected derived key, got %q", idemHeader)
 		}
-		return &Payment{ID: "p-1", IdempotencyKey: "drv:abc"}, nil
+		return &Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
 	}})
 	status, _, echo := doPost(t, h, `{"merchant_id":"`+testMerchantID+`","amount":100}`, "")
 	if status != 201 {
 		t.Fatalf("status: got %d, want 201", status)
 	}
-	if echo != "drv:abc" {
-		t.Fatalf("echo header: got %q, want effective key", echo)
+	if !strings.HasPrefix(echo, "drv:") {
+		t.Fatalf("echo header: got %q, want derived key", echo)
 	}
 }

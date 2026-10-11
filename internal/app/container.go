@@ -5,31 +5,27 @@ import (
 	"database/sql"
 	"log/slog"
 	"os"
-	"time"
 
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
-	"paymentgateway/internal/ratelimit"
-	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/logging"
 	"paymentgateway/pkg/tracing"
 
-	"github.com/gofiber/contrib/otelfiber"
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/requestid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type Container struct {
-	App      *fiber.App
 	AppDB    *sql.DB
 	LedgerDB *sql.DB
 	Redis    *redis.Client
 	Logger   *slog.Logger
 	Tracer   *sdktrace.TracerProvider
+	Config   config.Config
+	Merchant *merchant.Handler
+	Payment  *payment.Handler
 }
 
 // Shutdown flushes telemetry (no-op until an exporter is configured).
@@ -60,16 +56,5 @@ func Build(cfg config.Config) (*Container, error) {
 	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb)
 	pH := payment.NewHandler(pSvc)
 
-	f := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
-	f.Use(requestid.New())
-	f.Use(logging.Bridge())
-	f.Use(otelfiber.Middleware(otelfiber.WithTracerProvider(tp)))
-	f.Use(logging.Stash())
-	f.Use(logging.RequestLogger(logger))
-	f.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
-	f.Use(ratelimit.Middleware(rdb, cfg.RateLimit, time.Duration(cfg.RateWindow)*time.Second))
-	f.Post("/merchants", mH.Create)
-	f.Post("/payments", pH.Create)
-
-	return &Container{App: f, AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp}, nil
+	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
 }

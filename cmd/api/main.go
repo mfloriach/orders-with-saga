@@ -18,10 +18,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid config: %v", err)
 	}
+
 	c, err := app.Build(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	app, err := app.NewServer(*c)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -29,7 +36,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = c.Shutdown(ctx)
-		_ = c.App.Shutdown()
+		_ = app.Shutdown()
 	}()
-	log.Fatal(c.App.Listen(fmt.Sprintf(":%d", cfg.Port)))
+	log.Fatal(app.Listen(fmt.Sprintf(":%d", cfg.Port)))
 }

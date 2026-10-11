@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"paymentgateway/internal/app"
 	"paymentgateway/internal/config"
@@ -17,5 +22,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.Shutdown(ctx)
+		_ = c.App.Shutdown()
+	}()
 	log.Fatal(c.App.Listen(fmt.Sprintf(":%d", cfg.Port)))
 }

@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -17,7 +19,19 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	return load(".env")
+}
+
+// load reads path when it exists and falls back to OS env alone, so
+// containers without a file keep working. OS env always wins over the
+// file (godotenv never overrides existing vars; cleanenv.ReadConfig would).
+func load(path string) (Config, error) {
 	var cfg Config
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := godotenv.Load(path); err != nil {
+			return Config{}, err
+		}
+	}
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return Config{}, err
 	}

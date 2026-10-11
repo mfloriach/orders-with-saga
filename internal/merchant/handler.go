@@ -3,10 +3,12 @@ package merchant
 import (
 	"context"
 	"errors"
+	"net/http"
 
-	"github.com/gofiber/fiber/v2"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/validate"
+
+	"github.com/gofiber/fiber/v2"
 )
 
 type Handler struct{ svc registerer }
@@ -32,6 +34,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	if errs := validate.Struct(b); errs != nil {
 		return apperr.ValidationFailed(errs)
 	}
+
 	m, err := h.svc.Register(c.Context(), b.Name, b.Email, b.WebhookURL)
 	switch {
 	case errors.Is(err, ErrEmailTaken):
@@ -39,5 +42,6 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	case err != nil:
 		return apperr.InternalError()
 	}
-	return c.Status(201).JSON(m)
+
+	return c.Status(http.StatusCreated).JSON(m)
 }

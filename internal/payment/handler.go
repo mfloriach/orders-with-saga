@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"paymentgateway/internal/merchant"
 	"paymentgateway/pkg/apperr"
@@ -34,6 +35,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	if errs := validate.Struct(b); errs != nil {
 		return apperr.ValidationFailed(errs)
 	}
+
 	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, b.IdempotencyKey)
 	var ce *ConflictError
 	switch {
@@ -48,5 +50,6 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	case err != nil:
 		return apperr.InternalError()
 	}
-	return c.Status(201).JSON(p)
+
+	return c.Status(http.StatusCreated).JSON(p)
 }

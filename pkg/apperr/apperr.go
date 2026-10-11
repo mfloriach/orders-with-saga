@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gofiber/fiber/v2"
+	"paymentgateway/pkg/logging"
 )
 
 type AppError struct {
@@ -49,6 +50,12 @@ func (e *AppError) WithHeader(key, value string) *AppError {
 func Handler(c *fiber.Ctx, err error) error {
 	var appErr *AppError
 	if !errors.As(err, &appErr) {
+		status := http.StatusInternalServerError
+		var fe *fiber.Error
+		if errors.As(err, &fe) {
+			status = fe.Code
+		}
+		logging.LogErrorResponse(c, status)
 		return fiber.DefaultErrorHandler(c, err)
 	}
 
@@ -56,6 +63,7 @@ func Handler(c *fiber.Ctx, err error) error {
 	if status < 400 || status > 599 {
 		status = http.StatusInternalServerError
 	}
+	logging.LogErrorResponse(c, status)
 
 	for key, value := range appErr.Headers {
 		c.Set(key, value)
@@ -65,6 +73,10 @@ func Handler(c *fiber.Ctx, err error) error {
 		"code":    appErr.Code,
 		"title":   appErr.Title,
 		"details": appErr.Details,
+	}
+
+	if id := logging.RequestIDFrom(c.UserContext()); id != "" {
+		body["request_id"] = id
 	}
 
 	for key, value := range appErr.Fields {

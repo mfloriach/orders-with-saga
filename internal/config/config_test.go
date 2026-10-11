@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,4 +65,36 @@ func merge(base, over map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func TestLoadFromFile(t *testing.T) {
+	dir := t.TempDir()
+	content := "# comment\nAPP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nPORT=9001\n\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	withEnv(t, map[string]string{})
+	cfg, err := load(filepath.Join(dir, ".env"))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if cfg.AppDSN != "postgres://file/app" || cfg.Port != 9001 {
+		t.Fatalf("file values not loaded: %+v", cfg)
+	}
+}
+
+func TestEnvWinsOverFile(t *testing.T) {
+	dir := t.TempDir()
+	content := "APP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nPORT=9001\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	withEnv(t, map[string]string{"PORT": "9002"})
+	cfg, err := load(filepath.Join(dir, ".env"))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if cfg.Port != 9002 {
+		t.Fatalf("expected env PORT=9002 to win, got %d", cfg.Port)
+	}
 }

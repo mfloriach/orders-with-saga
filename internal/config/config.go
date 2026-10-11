@@ -1,30 +1,32 @@
 package config
 
-import "os"
+import (
+	"fmt"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/ilyakaznacheev/cleanenv"
+)
 
 type Config struct {
-	Port       string
-	AppDSN     string
-	LedgerDSN  string
-	RedisAddr  string
-	RateLimit  int
-	RateWindow int // seconds
+	Port       int    `env:"PORT" env-default:"8080" validate:"required,min=1,max=65535"`
+	AppDSN     string `env:"APP_DSN" env-required:"true" validate:"required"`
+	LedgerDSN  string `env:"LEDGER_DSN" env-required:"true" validate:"required"`
+	RedisAddr  string `env:"REDIS_ADDR" env-required:"true" validate:"required"`
+	RateLimit  int    `env:"RATE_LIMIT" env-default:"100" validate:"gt=0"`
+	RateWindow int    `env:"RATE_WINDOW_SEC" env-default:"60" validate:"gt=0"`
 }
 
-func Load() Config {
-	return Config{
-		Port:       env("PORT", "8080"),
-		AppDSN:     env("APP_DSN", "postgres://app:app@localhost:5432/app?sslmode=disable"),
-		LedgerDSN:  env("LEDGER_DSN", "postgres://ledger:ledger@localhost:5433/ledger?sslmode=disable"),
-		RedisAddr:  env("REDIS_ADDR", "localhost:6379"),
-		RateLimit:  100,
-		RateWindow: 60,
+func Load() (Config, error) {
+	var cfg Config
+	if err := cleanenv.ReadEnv(&cfg); err != nil {
+		return Config{}, err
 	}
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
+	if err := validator.New().Struct(cfg); err != nil {
+		if ve, ok := err.(validator.ValidationErrors); ok {
+			fe := ve[0]
+			return Config{}, fmt.Errorf("invalid %s: failed %q validation", fe.Field(), fe.Tag())
+		}
+		return Config{}, err
 	}
-	return d
+	return cfg, nil
 }

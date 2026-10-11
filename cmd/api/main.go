@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	"paymentgateway/internal/app"
@@ -8,10 +9,13 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
 	c, err := app.Build(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(c.App.Listen(":" + cfg.Port))
+	log.Fatal(c.App.Listen(fmt.Sprintf(":%d", cfg.Port)))
 }

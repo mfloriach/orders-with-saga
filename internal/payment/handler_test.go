@@ -14,20 +14,47 @@ import (
 )
 
 type stubService struct {
-	create func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error)
+	create func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error)
 }
 
-func (s stubService) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
-	return s.create(ctx, merchantID, amount, idemKey)
+func (s stubService) Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+	return s.create(ctx, merchantID, amount, idemHeader)
 }
 
 const testMerchantID = "123e4567-e89b-12d3-a456-426614174000"
+
+func doPost(t *testing.T, h *Handler, body, idemHeader string) (int, map[string]any, string) {
+	t.Helper()
+	app := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
+	app.Post("/payments", h.Create)
+	req := httptest.NewRequest("POST", "/payments", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if idemHeader != "" {
+		req.Header.Set("Idempotency-Key", idemHeader)
+	}
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var decoded map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, decoded, resp.Header.Get("Idempotency-Key")
+}
+
+func okStub() func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+	return func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+		return &Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: "pending"}, nil
+	}
+}
 
 func TestCreateErrors(t *testing.T) {
 	cases := []struct {
 		name       string
 		body       string
-		stub       func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error)
+		stub       func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error)
 		wantStatus int
 		wantCode   string
 		wantExtra  string
@@ -36,24 +63,24 @@ func TestCreateErrors(t *testing.T) {
 		{"validation failure", `{"merchant_id":"not-a-uuid","amount":0}`, nil, 400, "validation_error", ""},
 		{
 			"merchant not found",
-			`{"merchant_id":"` + testMerchantID + `","amount":100,"idempotency_key":"k"}`,
-			func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
+			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
 				return nil, merchant.ErrNotFound
 			},
 			404, "merchant_not_found", "",
 		},
 		{
 			"idempotency conflict",
-			`{"merchant_id":"` + testMerchantID + `","amount":100,"idempotency_key":"k"}`,
-			func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
-				return nil, &ConflictError{Existing: &Payment{ID: "pid-9"}}
+			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+				return nil, &ConflictError{Existing: &Payment{ID: "pid-9", IdempotencyKey: "k-1"}}
 			},
 			409, "idempotency_conflict", "pid-9",
 		},
 		{
 			"internal error",
-			`{"merchant_id":"` + testMerchantID + `","amount":100,"idempotency_key":"k"}`,
-			func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
+			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
 				return nil, errors.New("boom")
 			},
 			500, "internal_error", "",
@@ -61,22 +88,9 @@ func TestCreateErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(stubService{create: tc.stub})
-			app := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
-			app.Post("/payments", h.Create)
-			req := httptest.NewRequest("POST", "/payments", strings.NewReader(tc.body))
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tc.wantStatus {
-				t.Fatalf("status: got %d, want %d", resp.StatusCode, tc.wantStatus)
-			}
-			var body map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-				t.Fatal(err)
+			status, body, _ := doPost(t, NewHandler(stubService{create: tc.stub}), tc.body, "k-1")
+			if status != tc.wantStatus {
+				t.Fatalf("status: got %d, want %d", status, tc.wantStatus)
 			}
 			if body["code"] != tc.wantCode {
 				t.Fatalf("code: got %v, want %v", body["code"], tc.wantCode)
@@ -89,19 +103,44 @@ func TestCreateErrors(t *testing.T) {
 }
 
 func TestCreateSuccess(t *testing.T) {
-	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
-		return &Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey, Status: "pending"}, nil
-	}})
-	app := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
-	app.Post("/payments", h.Create)
-	req := httptest.NewRequest("POST", "/payments", strings.NewReader(`{"merchant_id":"`+testMerchantID+`","amount":100,"idempotency_key":"k"}`))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatal(err)
+	status, _, echo := doPost(t,
+		NewHandler(stubService{create: okStub()}),
+		`{"merchant_id":"`+testMerchantID+`","amount":100}`, "k-1")
+	if status != 201 {
+		t.Fatalf("status: got %d, want 201", status)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 201 {
-		t.Fatalf("status: got %d, want 201", resp.StatusCode)
+	if echo != "k-1" {
+		t.Fatalf("echo header: got %q, want %q", echo, "k-1")
+	}
+}
+
+func TestHeaderPassedToService(t *testing.T) {
+	var gotHeader string
+	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+		gotHeader = idemHeader
+		return &Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
+	}})
+	status, _, echo := doPost(t, h, `{"merchant_id":"`+testMerchantID+`","amount":100}`, "client-key")
+	if status != 201 || gotHeader != "client-key" {
+		t.Fatalf("got header=%q status=%d", gotHeader, status)
+	}
+	if echo != "client-key" {
+		t.Fatalf("echo header: got %q", echo)
+	}
+}
+
+func TestMissingHeaderEchoesEffectiveKey(t *testing.T) {
+	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+		if idemHeader != "" {
+			t.Fatalf("expected empty header passthrough, got %q", idemHeader)
+		}
+		return &Payment{ID: "p-1", IdempotencyKey: "drv:abc"}, nil
+	}})
+	status, _, echo := doPost(t, h, `{"merchant_id":"`+testMerchantID+`","amount":100}`, "")
+	if status != 201 {
+		t.Fatalf("status: got %d, want 201", status)
+	}
+	if echo != "drv:abc" {
+		t.Fatalf("echo header: got %q, want effective key", echo)
 	}
 }

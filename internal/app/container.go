@@ -7,12 +7,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/gofiber/contrib/otelfiber"
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/requestid"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/redis/go-redis/v9"
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
@@ -20,15 +14,22 @@ import (
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/logging"
 	"paymentgateway/pkg/tracing"
+
+	"github.com/gofiber/contrib/otelfiber"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/redis/go-redis/v9"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type Container struct {
-	App     *fiber.App
-	AppDB   *sql.DB
+	App      *fiber.App
+	AppDB    *sql.DB
 	LedgerDB *sql.DB
-	Redis   *redis.Client
-	Logger  *slog.Logger
-	Tracer  *sdktrace.TracerProvider
+	Redis    *redis.Client
+	Logger   *slog.Logger
+	Tracer   *sdktrace.TracerProvider
 }
 
 // Shutdown flushes telemetry (no-op until an exporter is configured).

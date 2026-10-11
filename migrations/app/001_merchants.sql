@@ -1,0 +1,8 @@
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE TABLE IF NOT EXISTS merchants (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 200),
+  email CITEXT UNIQUE NOT NULL,
+  webhook_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

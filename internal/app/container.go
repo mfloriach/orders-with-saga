@@ -11,6 +11,7 @@ import (
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
 	"paymentgateway/internal/ratelimit"
+	"paymentgateway/pkg/apperr"
 )
 
 type Container struct {
@@ -40,7 +41,7 @@ func Build(cfg config.Config) (*Container, error) {
 	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb)
 	pH := payment.NewHandler(pSvc)
 
-	f := fiber.New()
+	f := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
 	f.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
 	f.Use(ratelimit.Middleware(rdb, cfg.RateLimit, time.Duration(cfg.RateWindow)*time.Second))
 	f.Post("/merchants", mH.Create)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"paymentgateway/pkg/apperr"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -23,8 +25,7 @@ func Middleware(rdb *redis.Client, limit int, window time.Duration) fiber.Handle
 		}
 		if n > int64(limit) {
 			ttl, _ := rdb.TTL(ctx, key).Result()
-			c.Set("Retry-After", fmt.Sprintf("%d", int(ttl.Seconds())+1))
-			return c.Status(429).JSON(fiber.Map{"code": "rate_limited", "retry_after": int(ttl.Seconds()) + 1})
+			return apperr.RateLimitedError(int(ttl.Seconds()) + 1)
 		}
 		return c.Next()
 	}

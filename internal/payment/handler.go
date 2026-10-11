@@ -1,17 +1,24 @@
 package payment
 
 import (
+	"context"
 	"errors"
 
-	"github.com/gofiber/fiber/v2"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/validate"
+
+	"github.com/gofiber/fiber/v2"
 )
 
-type Handler struct{ svc *Service }
+type Handler struct{ svc creator }
 
-func NewHandler(svc *Service) *Handler { return &Handler{svc} }
+// creator is the subset of Service the handler needs (stubbed in tests).
+type creator interface {
+	Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error)
+}
+
+func NewHandler(svc creator) *Handler { return &Handler{svc} }
 
 type createBody struct {
 	MerchantID     string `json:"merchant_id" validate:"required,uuid"`
@@ -22,26 +29,24 @@ type createBody struct {
 func (h *Handler) Create(c *fiber.Ctx) error {
 	var b createBody
 	if err := c.BodyParser(&b); err != nil {
-		return apperr.Write(c, 400, "validation_error", map[string]string{"body": "invalid JSON"})
+		return apperr.InvalidJSON()
 	}
 	if errs := validate.Struct(b); errs != nil {
-		return apperr.Write(c, 400, "validation_error", errs)
+		return apperr.ValidationFailed(errs)
 	}
 	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, b.IdempotencyKey)
-	if errors.Is(err, merchant.ErrNotFound) {
-		return apperr.Write(c, 404, "merchant_not_found", nil)
-	}
 	var ce *ConflictError
-	if errors.As(err, &ce) {
+	switch {
+	case errors.Is(err, merchant.ErrNotFound):
+		return apperr.MerchantNotFound()
+	case errors.As(err, &ce):
 		id := ""
 		if ce.Existing != nil {
 			id = ce.Existing.ID
 		}
-		c.Set("Conflict-Payment-ID", id)
-		return c.Status(409).JSON(fiber.Map{"code": "idempotency_conflict", "payment_id": id})
-	}
-	if err != nil {
-		return apperr.Write(c, 500, "internal_error", nil)
+		return apperr.IdempotencyConflict(id)
+	case err != nil:
+		return apperr.InternalError()
 	}
 	return c.Status(201).JSON(p)
 }

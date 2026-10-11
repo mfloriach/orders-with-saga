@@ -1,6 +1,7 @@
 package merchant
 
 import (
+	"context"
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
@@ -8,9 +9,14 @@ import (
 	"paymentgateway/pkg/validate"
 )
 
-type Handler struct{ svc *Service }
+type Handler struct{ svc registerer }
 
-func NewHandler(svc *Service) *Handler { return &Handler{svc} }
+// registerer is the subset of Service the handler needs (stubbed in tests).
+type registerer interface {
+	Register(ctx context.Context, name, email string, webhook *string) (*Merchant, error)
+}
+
+func NewHandler(svc registerer) *Handler { return &Handler{svc} }
 
 type createBody struct {
 	Name       string  `json:"name" validate:"required,min=1,max=200"`
@@ -21,17 +27,17 @@ type createBody struct {
 func (h *Handler) Create(c *fiber.Ctx) error {
 	var b createBody
 	if err := c.BodyParser(&b); err != nil {
-		return apperr.Write(c, 400, "validation_error", map[string]string{"body": "invalid JSON"})
+		return apperr.InvalidJSON()
 	}
 	if errs := validate.Struct(b); errs != nil {
-		return apperr.Write(c, 400, "validation_error", errs)
+		return apperr.ValidationFailed(errs)
 	}
 	m, err := h.svc.Register(c.Context(), b.Name, b.Email, b.WebhookURL)
-	if errors.Is(err, ErrEmailTaken) {
-		return apperr.Write(c, 409, "email_taken", nil)
-	}
-	if err != nil {
-		return apperr.Write(c, 500, "internal_error", nil)
+	switch {
+	case errors.Is(err, ErrEmailTaken):
+		return apperr.EmailTaken()
+	case err != nil:
+		return apperr.InternalError()
 	}
 	return c.Status(201).JSON(m)
 }

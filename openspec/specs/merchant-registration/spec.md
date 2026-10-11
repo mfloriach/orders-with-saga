@@ -15,18 +15,18 @@ The system SHALL register a merchant with name, email, and optional webhook URL,
 
 #### Scenario: Validation failure
 - **WHEN** client POSTs `/merchants` with missing/invalid `name` or `email`, or non-HTTP(S) `webhook_url`
-- **THEN** system returns `400` with per-field error details and creates nothing
+- **THEN** system returns `400` with code `validation_error`, a `title`, per-field `errors` details, and creates nothing
 
 ### Requirement: Merchant email uniqueness
 The system SHALL reject a merchant registration when `email` is already registered.
 
 #### Scenario: Duplicate email
 - **WHEN** client POSTs `/merchants` with an `email` already in use
-- **THEN** system returns `409` with an `email_taken` error code
+- **THEN** system returns `409` with an `email_taken` error code, a `title`, and `details`
 
 ### Requirement: Lookup merchant for payment attribution
 The system SHALL resolve a merchant by ID when creating a payment.
 
 #### Scenario: Unknown merchant on payment
 - **WHEN** client POSTs `/payments` with a `merchant_id` that does not exist
-- **THEN** system returns `404` with a `merchant_not_found` error code
+- **THEN** system returns `404` with a `merchant_not_found` error code, a `title`, and `details`

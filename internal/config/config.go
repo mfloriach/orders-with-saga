@@ -16,6 +16,17 @@ type Config struct {
 	RedisAddr  string `env:"REDIS_ADDR" env-required:"true" validate:"required"`
 	RateLimit  int    `env:"RATE_LIMIT" env-default:"100" validate:"gt=0"`
 	RateWindow int    `env:"RATE_WINDOW_SEC" env-default:"60" validate:"gt=0"`
+
+	PGMaxOpen        int `env:"PG_MAX_OPEN" env-default:"25" validate:"gt=0"`
+	PGMaxIdle        int `env:"PG_MAX_IDLE" env-default:"5" validate:"gte=0"`
+	PGMaxLifetime    int `env:"PG_MAX_LIFETIME_SEC" env-default:"300" validate:"gt=0"`
+	PGMaxIdleTime    int `env:"PG_MAX_IDLE_SEC" env-default:"60" validate:"gt=0"`
+	PGConnectTimeout int `env:"PG_CONNECT_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
+
+	RedisPoolSize     int `env:"REDIS_POOL_SIZE" env-default:"0" validate:"gte=0"`
+	RedisDialTimeout  int `env:"REDIS_DIAL_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
+	RedisReadTimeout  int `env:"REDIS_READ_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
+	RedisWriteTimeout int `env:"REDIS_WRITE_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
 }
 
 func Load() (Config, error) {

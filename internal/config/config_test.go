@@ -9,7 +9,9 @@ import (
 
 func withEnv(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, k := range []string{"PORT", "APP_DSN", "LEDGER_DSN", "REDIS_ADDR", "RATE_LIMIT", "RATE_WINDOW_SEC"} {
+	for _, k := range []string{"PORT", "APP_DSN", "LEDGER_DSN", "REDIS_ADDR", "RATE_LIMIT", "RATE_WINDOW_SEC",
+		"PG_MAX_OPEN", "PG_MAX_IDLE", "PG_MAX_LIFETIME_SEC", "PG_MAX_IDLE_SEC", "PG_CONNECT_TIMEOUT_SEC",
+		"REDIS_POOL_SIZE", "REDIS_DIAL_TIMEOUT_SEC", "REDIS_READ_TIMEOUT_SEC", "REDIS_WRITE_TIMEOUT_SEC"} {
 		v, ok := env[k]
 		if !ok || v == "" {
 			os.Unsetenv(k)
@@ -21,7 +23,7 @@ func withEnv(t *testing.T, env map[string]string) {
 
 func TestLoad(t *testing.T) {
 	valid := map[string]string{
-		"APP_DSN": "postgres://app:app@localhost:5432/app?sslmode=disable",
+		"APP_DSN":    "postgres://app:app@localhost:5432/app?sslmode=disable",
 		"LEDGER_DSN": "postgres://ledger:ledger@localhost:5433/ledger?sslmode=disable",
 		"REDIS_ADDR": "localhost:6379",
 	}
@@ -35,6 +37,9 @@ func TestLoad(t *testing.T) {
 		{"missing app DSN", merge(valid, map[string]string{"APP_DSN": ""}), "AppDSN"},
 		{"bad port", merge(valid, map[string]string{"PORT": "abc"}), "PORT"},
 		{"zero rate limit", merge(valid, map[string]string{"RATE_LIMIT": "0"}), "RateLimit"},
+		{"zero pg max open", merge(valid, map[string]string{"PG_MAX_OPEN": "0"}), "PGMaxOpen"},
+		{"negative pg timeout", merge(valid, map[string]string{"PG_CONNECT_TIMEOUT_SEC": "-1"}), "PGConnectTimeout"},
+		{"negative redis pool", merge(valid, map[string]string{"REDIS_POOL_SIZE": "-1"}), "RedisPoolSize"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

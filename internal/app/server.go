@@ -30,7 +30,9 @@ func configure(f *fiber.App, cnt Container) {
 }
 
 func routes(f *fiber.App, cnt Container) {
-	f.Get("/health", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"ok": true}) })
+	f.Get("/health", Health)
+
+	f.Get("/ready", readyHandler(readyChecks(&cnt)))
 
 	f.Use(ratelimit.Middleware(cnt.Redis, cnt.Config.RateLimit, time.Duration(cnt.Config.RateWindow)*time.Second))
 	f.Post("/merchants", cnt.Merchant.Create)

@@ -21,12 +21,12 @@ func main() {
 
 	c, err := app.Build(cfg)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not build app: %v", err)
 	}
 
 	app, err := app.NewServer(*c)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not create server: %v", err)
 	}
 
 	go func() {

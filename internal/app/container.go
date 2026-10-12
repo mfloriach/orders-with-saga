@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -12,7 +14,6 @@ import (
 	"paymentgateway/pkg/logging"
 	"paymentgateway/pkg/tracing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -26,23 +27,52 @@ type Container struct {
 	Config   config.Config
 	Merchant *merchant.Handler
 	Payment  *payment.Handler
+
+	closed bool
 }
 
-// Shutdown flushes telemetry (no-op until an exporter is configured).
+// Shutdown closes pools and flushes telemetry. Every step runs even if an
+// earlier one fails; errors join with context. Idempotent: repeats return nil.
 func (c *Container) Shutdown(ctx context.Context) error {
-	return c.Tracer.Shutdown(ctx)
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	var errs []error
+	if err := c.Redis.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close redis: %w", err))
+	}
+	if err := c.AppDB.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close app db: %w", err))
+	}
+	if err := c.LedgerDB.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close ledger db: %w", err))
+	}
+	if err := c.Tracer.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("shutdown tracer: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 func Build(cfg config.Config) (*Container, error) {
-	appDB, err := sql.Open("pgx", cfg.AppDSN)
+	appDB, err := OpenPostgres(cfg.AppDSN, "app", cfg)
 	if err != nil {
 		return nil, err
 	}
-	ledgerDB, err := sql.Open("pgx", cfg.LedgerDSN)
+
+	ledgerDB, err := OpenPostgres(cfg.LedgerDSN, "ledger", cfg)
 	if err != nil {
+		appDB.Close()
 		return nil, err
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+
+	rdb, err := OpenRedis(cfg)
+	if err != nil {
+		appDB.Close()
+		ledgerDB.Close()
+		return nil, err
+	}
+
 	logger := logging.New(os.Stdout)
 	slog.SetDefault(logger)
 	tp := tracing.Init()

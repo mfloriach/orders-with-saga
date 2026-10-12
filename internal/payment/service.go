@@ -25,8 +25,6 @@ func NewService(app *AppRepository, ledger *LedgerRepository, merchants *merchan
 	return &Service{app: app, ledger: ledger, merchants: merchants, redis: rdb}
 }
 
-func idemKey(merchantID, key string) string { return "payments:idem:" + merchantID + ":" + key }
-
 func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
 	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
 		return nil, err
@@ -71,5 +69,3 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 
 	return p, nil
 }
-
-func idemKeyFunc(merchantID, key string) string { return idemKey(merchantID, key) }

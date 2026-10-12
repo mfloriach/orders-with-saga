@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -43,8 +44,27 @@ func (r *AppRepository) FindByIdem(ctx context.Context, merchantID, key string) 
 	return &p, err
 }
 
-func (r *AppRepository) MarkFailed(ctx context.Context, id string) {
-	r.db.ExecContext(ctx, `UPDATE payments SET status='failed' WHERE id=$1`, id)
+func (r *AppRepository) MarkFailed(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE payments
+		SET status = 'failed'
+		WHERE id = $1
+		  AND status <> 'failed'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("mark ledger entry %q as failed: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows for ledger entry %q: %w", id, err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("ledger entry %q not found or already failed", id)
+	}
+
+	return nil
 }
 
 type LedgerRepository struct{ db *sql.DB }
@@ -56,4 +76,27 @@ func (r *LedgerRepository) Insert(ctx context.Context, paymentID string, amount 
 		`INSERT INTO ledger_entries (id, payment_id, amount) VALUES ($1,$2,$3)`,
 		uuid.NewString(), paymentID, amount)
 	return err
+}
+
+func (r *LedgerRepository) MarkFailed(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE ledger_entries
+		SET status = 'failed'
+		WHERE id = $1
+		  AND status <> 'failed'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("mark ledger entry %q as failed: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows for ledger entry %q: %w", id, err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("ledger entry %q not found or already failed", id)
+	}
+
+	return nil
 }

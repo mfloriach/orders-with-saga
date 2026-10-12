@@ -41,16 +41,25 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 	}
 
 	p := &Payment{MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
-	markFailed := func(c context.Context) error { s.app.MarkFailed(c, p.ID); return nil }
 	err = saga.Saga{Name: "create-payment", Steps: []saga.Step{
-		{Name: "insert-payment",
+		{
+			Name: "insert-payment",
 			Do: func(ctx context.Context) error {
 				return s.app.InsertPending(ctx, p)
 			},
-			Compensate: markFailed},
-		{Name: "insert-ledger", Do: func(ctx context.Context) error {
-			return s.ledger.Insert(ctx, p.ID, p.Amount)
-		}, Compensate: markFailed},
+			Compensate: func(c context.Context) error {
+				return s.app.MarkFailed(c, p.ID)
+			},
+		},
+		{
+			Name: "insert-ledger",
+			Do: func(ctx context.Context) error {
+				return s.ledger.Insert(ctx, p.ID, p.Amount)
+			},
+			Compensate: func(c context.Context) error {
+				return s.ledger.MarkFailed(c, p.ID)
+			},
+		},
 	}}.Run(ctx)
 	if err != nil {
 		var re *saga.RunError

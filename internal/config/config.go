@@ -32,9 +32,11 @@ func load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return Config{}, err
 	}
+
 	if err := validator.New().Struct(cfg); err != nil {
 		if ve, ok := err.(validator.ValidationErrors); ok {
 			fe := ve[0]

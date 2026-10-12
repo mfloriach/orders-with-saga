@@ -53,7 +53,9 @@ func Build(cfg config.Config) (*Container, error) {
 
 	pApp := payment.NewAppRepository(appDB)
 	pLedger := payment.NewLedgerRepository(ledgerDB)
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb)
+	// ponytail: nil processor until the vendor client lands; Create fails
+	// closed with a descriptive error rather than calling nothing.
+	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, nil)
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil

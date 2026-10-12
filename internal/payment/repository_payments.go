@@ -12,6 +12,12 @@ import (
 
 var ErrConflict = errors.New("idempotency_conflict")
 
+type PaymentRepository interface {
+	InsertPending(ctx context.Context, p *Payment) error
+	FindByIdem(ctx context.Context, merchantID, key string) (*Payment, error)
+	MarkFailed(ctx context.Context, id string) error
+}
+
 type AppRepository struct{ db *sql.DB }
 
 func NewAppRepository(db *sql.DB) *AppRepository { return &AppRepository{db} }
@@ -44,43 +50,23 @@ func (r *AppRepository) FindByIdem(ctx context.Context, merchantID, key string) 
 	return &p, err
 }
 
-func (r *AppRepository) MarkFailed(ctx context.Context, id string) error {
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE payments
-		SET status = 'failed'
-		WHERE id = $1
-		  AND status <> 'failed'
-	`, id)
-	if err != nil {
-		return fmt.Errorf("mark ledger entry %q as failed: %w", id, err)
+// EnqueueReconciliation records an in-doubt payment for later batch
+// processing. Re-enqueue of the same payment is a no-op.
+func (r *AppRepository) EnqueueReconciliation(ctx context.Context, paymentID, idemKey, step string, cause error) error {
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("get affected rows for ledger entry %q: %w", id, err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("ledger entry %q not found or already failed", id)
-	}
-
-	return nil
-}
-
-type LedgerRepository struct{ db *sql.DB }
-
-func NewLedgerRepository(db *sql.DB) *LedgerRepository { return &LedgerRepository{db} }
-
-func (r *LedgerRepository) Insert(ctx context.Context, paymentID string, amount int64) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO ledger_entries (id, payment_id, amount) VALUES ($1,$2,$3)`,
-		uuid.NewString(), paymentID, amount)
+		`INSERT INTO reconciliation_outbox (payment_id, idempotency_key, step, error)
+		 VALUES ($1,$2,$3,$4) ON CONFLICT (payment_id) DO NOTHING`,
+		paymentID, idemKey, step, msg)
 	return err
 }
 
-func (r *LedgerRepository) MarkFailed(ctx context.Context, id string) error {
+func (r *AppRepository) MarkFailed(ctx context.Context, id string) error {
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE ledger_entries
+		UPDATE payments
 		SET status = 'failed'
 		WHERE id = $1
 		  AND status <> 'failed'

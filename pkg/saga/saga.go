@@ -7,6 +7,7 @@ package saga
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -51,9 +52,21 @@ type StepError struct {
 func (e StepError) Error() string { return fmt.Sprintf("compensate %s: %v", e.Step, e.Err) }
 func (e StepError) Unwrap() error { return e.Err }
 
+// InDoubtError signals that a step's outcome could not be confirmed
+// (e.g. remote call timed out and status query was inconclusive).
+// Run skips unwind for it: completed work is kept for later reconciliation.
+type InDoubtError struct {
+	Step string
+	Err  error
+}
+
+func (e *InDoubtError) Error() string { return fmt.Sprintf("in-doubt %s: %v", e.Step, e.Err) }
+func (e *InDoubtError) Unwrap() error { return e.Err }
+
 // RunError is the failure result. Completed holds executed step names in
 // order — the resume set a future reconciler persists. CompensateErrs holds
-// per-step undo failures, if any.
+// per-step undo failures, if any. InDoubt reports the failure is unconfirmed
+// and no compensation ran.
 type RunError struct {
 	SagaID         string
 	SagaName       string
@@ -61,9 +74,14 @@ type RunError struct {
 	StepErr        error
 	Completed      []string
 	CompensateErrs []StepError
+	InDoubt        bool
 }
 
 func (e *RunError) Error() string {
+	if e.InDoubt {
+		return fmt.Sprintf("saga %s: step %s in-doubt: %v (no compensation ran)",
+			e.SagaID, e.FailedStep, e.StepErr)
+	}
 	return fmt.Sprintf("saga %s: step %s failed: %v (%d compensate errors)",
 		e.SagaID, e.FailedStep, e.StepErr, len(e.CompensateErrs))
 }
@@ -117,6 +135,19 @@ func (s Saga) Run(ctx context.Context) error {
 		}
 
 		if err := s.do(ctx, tr, st); err != nil {
+			var indoubt *InDoubtError
+			if errors.As(err, &indoubt) {
+				log.WarnContext(ctx, "saga step in-doubt, skipping unwind",
+					slog.String("step", st.Name), slog.String("error", err.Error()))
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "step in-doubt")
+				return &RunError{
+					SagaID: id, SagaName: s.Name,
+					FailedStep: st.Name, StepErr: err,
+					Completed: append([]string(nil), completed...),
+					InDoubt:   true,
+				}
+			}
 			log.ErrorContext(ctx, "saga step failed",
 				slog.String("step", st.Name), slog.String("error", err.Error()))
 			span.RecordError(err)

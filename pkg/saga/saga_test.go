@@ -241,3 +241,49 @@ func TestNilLoggerSafe(t *testing.T) {
 		t.Fatal("expected error with nil logger")
 	}
 }
+
+// verifies an in-doubt step skips unwind and keeps completed steps reported.
+func TestInDoubtSkipsUnwind(t *testing.T) {
+	compensated := false
+	cause := errors.New("status query inconclusive")
+	s := Saga{ID: "s-1", Name: "t", Steps: []Step{
+		{Name: "a", Do: ok(), Compensate: func(context.Context) error { compensated = true; return nil }},
+		{Name: "b", Do: ok(), Compensate: func(context.Context) error { compensated = true; return nil }},
+		{Name: "c", Do: func(context.Context) error { return &InDoubtError{Step: "c", Err: cause} }},
+	}}
+	err := s.Run(context.Background())
+	var re *RunError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RunError, got %T", err)
+	}
+	if !re.InDoubt || re.FailedStep != "c" || !errors.Is(re.StepErr, cause) {
+		t.Fatalf("bad in-doubt identity: %+v", re)
+	}
+	if len(re.Completed) != 2 || len(re.CompensateErrs) != 0 {
+		t.Fatalf("bad resume data: %+v", re)
+	}
+	if compensated {
+		t.Fatal("compensation ran for in-doubt outcome")
+	}
+}
+
+// verifies an ordinary error still unwinds in reverse when in-doubt exists elsewhere.
+func TestInDoubtOrdinaryErrorStillUnwinds(t *testing.T) {
+	var undid []string
+	boom := errors.New("boom")
+	s := Saga{Name: "t", Steps: []Step{
+		{Name: "a", Do: ok(), Compensate: func(context.Context) error { undid = append(undid, "a"); return nil }},
+		{Name: "b", Do: fail(boom)},
+	}}
+	err := s.Run(context.Background())
+	var re *RunError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RunError, got %T", err)
+	}
+	if re.InDoubt {
+		t.Fatalf("ordinary error flagged in-doubt: %+v", re)
+	}
+	if len(undid) != 1 || undid[0] != "a" {
+		t.Fatalf("ordinary error did not unwind: %v", undid)
+	}
+}

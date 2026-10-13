@@ -114,6 +114,19 @@ func TestCreateSuccess(t *testing.T) {
 	}
 }
 
+// TestCreateEchoesStoredStatus pins that 201 echoes the service status,
+// authorized once the network confirms funds held.
+func TestCreateEchoesStoredStatus(t *testing.T) {
+	status, body, _ := doPost(t,
+		NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {
+			return &Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: StatusAuthorized}, nil
+		}}),
+		`{"merchant_id":"`+testMerchantID+`","amount":100}`, "k-1")
+	if status != 201 || body["status"] != StatusAuthorized {
+		t.Fatalf("got %d %v", status, body)
+	}
+}
+
 func TestHeaderPassedToService(t *testing.T) {
 	var gotHeader string
 	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error) {

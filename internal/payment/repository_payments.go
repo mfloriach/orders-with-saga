@@ -16,6 +16,9 @@ type PaymentRepository interface {
 	InsertPending(ctx context.Context, p *Payment) error
 	FindByIdem(ctx context.Context, merchantID, key string) (*Payment, error)
 	MarkFailed(ctx context.Context, id string) error
+	MarkAuthorized(ctx context.Context, id string) error
+	MarkCaptured(ctx context.Context, id string) error
+	EnqueueReconciliation(ctx context.Context, paymentID, idemKey, step string, cause error) error
 }
 
 type AppRepository struct{ db *sql.DB }
@@ -82,6 +85,55 @@ func (r *AppRepository) MarkFailed(ctx context.Context, id string) error {
 
 	if rows == 0 {
 		return fmt.Errorf("ledger entry %q not found or already failed", id)
+	}
+
+	return nil
+}
+
+// MarkAuthorized moves a pending payment to authorized. The pending
+// precondition makes double-marking fail loudly instead of rewriting
+// history; callers check the transition first for a decision-time error.
+func (r *AppRepository) MarkAuthorized(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE payments
+		SET status = 'authorized'
+		WHERE id = $1
+		  AND status = 'pending'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("mark payment %q as authorized: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows for payment %q: %w", id, err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("payment %q not found or not pending", id)
+	}
+
+	return nil
+}
+
+func (r *AppRepository) MarkCaptured(ctx context.Context, id string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE payments
+		SET status = 'captured'
+		WHERE id = $1
+		  AND status = 'authorized'
+	`, id)
+	if err != nil {
+		return fmt.Errorf("mark payment %q as captured: %w", id, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get affected rows for payment %q: %w", id, err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("payment %q not found or not authorized", id)
 	}
 
 	return nil

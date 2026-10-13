@@ -17,14 +17,14 @@ type ConflictError struct{ Existing *Payment }
 func (e *ConflictError) Error() string { return "idempotency_conflict" }
 
 type Service struct {
-	app       *AppRepository
+	app       PaymentRepository
 	ledger    *LedgerRepository
 	merchants *merchant.Repository
 	redis     *redis.Client
 	processor Processor
 }
 
-func NewService(app *AppRepository, ledger *LedgerRepository, merchants *merchant.Repository, rdb *redis.Client, processor Processor) *Service {
+func NewService(app PaymentRepository, ledger *LedgerRepository, merchants *merchant.Repository, rdb *redis.Client, processor Processor) *Service {
 	return &Service{app: app, ledger: ledger, merchants: merchants, redis: rdb, processor: processor}
 }
 
@@ -49,7 +49,15 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 				return s.app.InsertPending(ctx, p)
 			},
 			Compensate: func(c context.Context) error {
-				return s.app.MarkFailed(c, p.ID)
+				if err := p.TransitionTo(StatusFailed); err != nil {
+					return fmt.Errorf("payment: failed to transition to failed: %w", err)
+				}
+
+				if err := s.app.MarkFailed(ctx, p.ID); err != nil {
+					return fmt.Errorf("payment: failed to mark failed: %w", err)
+				}
+
+				return nil
 			},
 		},
 		{
@@ -103,19 +111,48 @@ func (s *Service) callProcessor(ctx context.Context, p *Payment, idemKey string)
 		return errors.New("payment: processor not configured")
 	}
 
+	// authorize
 	err := s.processor.Call(ctx, p.ID, p.Amount, idemKey)
 	if err == nil {
+		if err := p.TransitionTo(StatusAuthorized); err != nil {
+			return err
+		}
+
+		if err := s.app.MarkAuthorized(ctx, p.ID); err != nil {
+			return err
+		}
+		p.Status = StatusAuthorized
+
 		return nil
 	}
 	if !s.processor.Retryable(err) {
 		return err
 	}
 
+	// capture: the network holds funds, settle via the confirmed state.
 	accepted, qerr := s.processor.Status(ctx, p.ID)
 	if qerr != nil {
 		return &saga.InDoubtError{Step: "call-api", Err: err}
 	}
 	if accepted {
+		if err := p.TransitionTo(StatusAuthorized); err != nil {
+			return err
+		}
+
+		if err := s.app.MarkAuthorized(ctx, p.ID); err != nil {
+			return err
+		}
+		p.Status = StatusAuthorized
+
+		if err := p.TransitionTo(StatusCaptured); err != nil {
+			return err
+		}
+
+		if err := s.app.MarkCaptured(ctx, p.ID); err != nil {
+			return err
+		}
+		p.Status = StatusCaptured
+
 		return nil
 	}
 	return fmt.Errorf("payment: processor did not accept %s: %w", p.ID, err)

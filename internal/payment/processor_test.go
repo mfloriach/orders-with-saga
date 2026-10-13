@@ -9,7 +9,7 @@ import (
 )
 
 type stubProcessor struct {
-	callErrs       []error
+	callErr        error
 	calls          int
 	statusAccepted bool
 	statusErr      error
@@ -19,10 +19,7 @@ type stubProcessor struct {
 
 func (s *stubProcessor) Call(context.Context, string, int64, string) error {
 	s.calls++
-	if s.calls <= len(s.callErrs) {
-		return s.callErrs[s.calls-1]
-	}
-	return s.callErrs[len(s.callErrs)-1]
+	return s.callErr
 }
 
 func (s *stubProcessor) Status(context.Context, string) (bool, error) {
@@ -32,39 +29,36 @@ func (s *stubProcessor) Status(context.Context, string) (bool, error) {
 
 func (s *stubProcessor) Retryable(error) bool { return s.retryable }
 
-// TestCallProcessorOutcomes covers the four reconcile outcomes plus
-// retry-then-success, all against a stubbed Processor.
+// TestCallProcessorOutcomes covers single-call success, terminal failure,
+// query-accepted, query-absent, and query-failed outcomes. Retry counting
+// lives in the client and repo httptest suites; the stub answers once.
 func TestCallProcessorOutcomes(t *testing.T) {
 	transient := errors.New("timeout")
 	refused := errors.New("refused")
 	queryDown := errors.New("status down")
 
 	cases := []struct {
-		name           string
-		stub           *stubProcessor
-		wantErr        bool
-		wantInDoubt    bool
-		wantCalls      int
+		name            string
+		stub            *stubProcessor
+		wantErr         bool
+		wantInDoubt     bool
 		wantStatusCalls int
 	}{
-		{"success first try",
-			&stubProcessor{callErrs: []error{nil}},
-			false, false, 1, 0},
-		{"terminal failure no retry no query",
-			&stubProcessor{callErrs: []error{refused}, retryable: false},
-			true, false, 1, 0},
-		{"transient then success",
-			&stubProcessor{callErrs: []error{transient, nil}, retryable: true},
-			false, false, 2, 0},
-		{"exhausted then query accepts",
-			&stubProcessor{callErrs: []error{transient, transient, transient, transient}, retryable: true, statusAccepted: true},
-			false, false, 3, 1},
-		{"exhausted then query absent",
-			&stubProcessor{callErrs: []error{transient, transient, transient}, retryable: true},
-			true, false, 3, 1},
-		{"exhausted then query fails",
-			&stubProcessor{callErrs: []error{transient, transient, transient}, retryable: true, statusErr: queryDown},
-			true, true, 3, 1},
+		{"success",
+			&stubProcessor{},
+			false, false, 0},
+		{"terminal failure no query",
+			&stubProcessor{callErr: refused},
+			true, false, 0},
+		{"failed call then query accepts",
+			&stubProcessor{callErr: transient, retryable: true, statusAccepted: true},
+			false, false, 1},
+		{"failed call then query absent",
+			&stubProcessor{callErr: transient, retryable: true},
+			true, false, 1},
+		{"failed call then query fails",
+			&stubProcessor{callErr: transient, retryable: true, statusErr: queryDown},
+			true, true, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,8 +75,8 @@ func TestCallProcessorOutcomes(t *testing.T) {
 			if tc.wantInDoubt != errors.As(err, &indoubt) {
 				t.Fatalf("in-doubt=%v, err=%v", tc.wantInDoubt, err)
 			}
-			if tc.stub.calls != tc.wantCalls {
-				t.Fatalf("calls: got %d, want %d", tc.stub.calls, tc.wantCalls)
+			if tc.stub.calls != 1 {
+				t.Fatalf("calls: got %d, want 1", tc.stub.calls)
 			}
 			if tc.stub.statusCalls != tc.wantStatusCalls {
 				t.Fatalf("status calls: got %d, want %d", tc.stub.statusCalls, tc.wantStatusCalls)

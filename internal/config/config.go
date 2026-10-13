@@ -27,6 +27,14 @@ type Config struct {
 	RedisDialTimeout  int `env:"REDIS_DIAL_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
 	RedisReadTimeout  int `env:"REDIS_READ_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
 	RedisWriteTimeout int `env:"REDIS_WRITE_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
+
+	MCBaseURL        string `env:"MC_BASE_URL" env-default:""`
+	MCAPIKey         string `env:"MC_API_KEY" env-default:""`
+	MCTimeout        int    `env:"MC_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
+	MCMaxAttempts    int    `env:"MC_MAX_ATTEMPTS" env-default:"3" validate:"gt=0"`
+	MCBaseBackoff    int    `env:"MC_BASE_BACKOFF_MS" env-default:"100" validate:"gt=0"`
+	MCMaxBackoff     int    `env:"MC_MAX_BACKOFF_MS" env-default:"2000" validate:"gt=0"`
+	MCOverallTimeout int    `env:"MC_OVERALL_TIMEOUT_SEC" env-default:"10" validate:"gt=0"`
 }
 
 func Load() (Config, error) {

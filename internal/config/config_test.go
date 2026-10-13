@@ -11,7 +11,8 @@ func withEnv(t *testing.T, env map[string]string) {
 	t.Helper()
 	for _, k := range []string{"PORT", "APP_DSN", "LEDGER_DSN", "REDIS_ADDR", "RATE_LIMIT", "RATE_WINDOW_SEC",
 		"PG_MAX_OPEN", "PG_MAX_IDLE", "PG_MAX_LIFETIME_SEC", "PG_MAX_IDLE_SEC", "PG_CONNECT_TIMEOUT_SEC",
-		"REDIS_POOL_SIZE", "REDIS_DIAL_TIMEOUT_SEC", "REDIS_READ_TIMEOUT_SEC", "REDIS_WRITE_TIMEOUT_SEC"} {
+		"REDIS_POOL_SIZE", "REDIS_DIAL_TIMEOUT_SEC", "REDIS_READ_TIMEOUT_SEC", "REDIS_WRITE_TIMEOUT_SEC",
+		"MC_BASE_URL", "MC_API_KEY", "MC_TIMEOUT_SEC", "MC_MAX_ATTEMPTS", "MC_BASE_BACKOFF_MS", "MC_MAX_BACKOFF_MS", "MC_OVERALL_TIMEOUT_SEC"} {
 		v, ok := env[k]
 		if !ok || v == "" {
 			os.Unsetenv(k)
@@ -40,6 +41,9 @@ func TestLoad(t *testing.T) {
 		{"zero pg max open", merge(valid, map[string]string{"PG_MAX_OPEN": "0"}), "PGMaxOpen"},
 		{"negative pg timeout", merge(valid, map[string]string{"PG_CONNECT_TIMEOUT_SEC": "-1"}), "PGConnectTimeout"},
 		{"negative redis pool", merge(valid, map[string]string{"REDIS_POOL_SIZE": "-1"}), "RedisPoolSize"},
+		{"zero mc timeout", merge(valid, map[string]string{"MC_TIMEOUT_SEC": "0"}), "MCTimeout"},
+		{"zero mc attempts", merge(valid, map[string]string{"MC_MAX_ATTEMPTS": "0"}), "MCMaxAttempts"},
+		{"zero mc overall timeout", merge(valid, map[string]string{"MC_OVERALL_TIMEOUT_SEC": "0"}), "MCOverallTimeout"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

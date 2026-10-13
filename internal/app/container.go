@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
+	"paymentgateway/pkg/apiclient"
 	"paymentgateway/pkg/logging"
 	"paymentgateway/pkg/tracing"
 
@@ -55,6 +57,11 @@ func (c *Container) Shutdown(ctx context.Context) error {
 }
 
 func Build(cfg config.Config) (*Container, error) {
+	processor, err := mastercardProcessor(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	appDB, err := OpenPostgres(cfg.AppDSN, "app", cfg)
 	if err != nil {
 		return nil, err
@@ -83,10 +90,26 @@ func Build(cfg config.Config) (*Container, error) {
 
 	pApp := payment.NewAppRepository(appDB)
 	pLedger := payment.NewLedgerRepository(ledgerDB)
-	// ponytail: nil processor until the vendor client lands; Create fails
-	// closed with a descriptive error rather than calling nothing.
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, nil)
+	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, processor)
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
+}
+
+// mastercardProcessor builds the card-network client when configured.
+// Empty base URL keeps the nil processor (Create fails closed); a base
+// URL without key is a boot error.
+func mastercardProcessor(cfg config.Config) (payment.Processor, error) {
+	return payment.NewMasterCardRepository(
+		apiclient.New(nil),
+		payment.MasterCardConfig{
+			BaseURL:        cfg.MCBaseURL,
+			APIKey:         cfg.MCAPIKey,
+			Timeout:        time.Duration(cfg.MCTimeout) * time.Second,
+			OverallTimeout: time.Duration(cfg.MCOverallTimeout) * time.Second,
+			MaxAttempts:    cfg.MCMaxAttempts,
+			BaseBackoff:    time.Duration(cfg.MCBaseBackoff) * time.Millisecond,
+			MaxBackoff:     time.Duration(cfg.MCMaxBackoff) * time.Millisecond,
+		},
+	), nil
 }

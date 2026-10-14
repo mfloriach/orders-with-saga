@@ -12,6 +12,7 @@ import (
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
+	"paymentgateway/internal/payment/repositories"
 	"paymentgateway/pkg/apiclient"
 	"paymentgateway/pkg/logging"
 	"paymentgateway/pkg/tracing"
@@ -57,7 +58,7 @@ func (c *Container) Shutdown(ctx context.Context) error {
 }
 
 func Build(cfg config.Config) (*Container, error) {
-	processor, err := mastercardProcessor(cfg)
+	network, err := cardNetwork(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -88,21 +89,21 @@ func Build(cfg config.Config) (*Container, error) {
 	mSvc := merchant.NewService(mRepo)
 	mH := merchant.NewHandler(mSvc)
 
-	pApp := payment.NewAppRepository(appDB)
-	pLedger := payment.NewLedgerRepository(ledgerDB)
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, processor)
+	pApp := repositories.NewPaymentDatabaseRepository(appDB)
+	pLedger := repositories.NewAuditRepository(ledgerDB)
+	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network)
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
 }
 
-// mastercardProcessor builds the card-network client when configured.
-// Empty base URL keeps the nil processor (Create fails closed); a base
+// cardNetwork builds the card-network client when configured.
+// Empty base URL keeps the nil network (Create fails closed); a base
 // URL without key is a boot error.
-func mastercardProcessor(cfg config.Config) (payment.Processor, error) {
-	return payment.NewMasterCardRepository(
+func cardNetwork(cfg config.Config) (payment.CardNetwork, error) {
+	return repositories.NewMasterCardRepository(
 		apiclient.New(nil),
-		payment.MasterCardConfig{
+		repositories.MasterCardConfig{
 			BaseURL:        cfg.MCBaseURL,
 			APIKey:         cfg.MCAPIKey,
 			Timeout:        time.Duration(cfg.MCTimeout) * time.Second,

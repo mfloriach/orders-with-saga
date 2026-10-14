@@ -122,7 +122,7 @@ func TestCreateEchoesStoredStatus(t *testing.T) {
 			return &Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: StatusAuthorized}, nil
 		}}),
 		`{"merchant_id":"`+testMerchantID+`","amount":100}`, "k-1")
-	if status != 201 || body["status"] != StatusAuthorized {
+	if status != 201 || body["status"] != string(StatusAuthorized) {
 		t.Fatalf("got %d %v", status, body)
 	}
 }

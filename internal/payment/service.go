@@ -17,19 +17,19 @@ type ConflictError struct{ Existing *Payment }
 func (e *ConflictError) Error() string { return "idempotency_conflict" }
 
 type Service struct {
-	app       PaymentRepository
-	ledger    *LedgerRepository
-	merchants *merchant.Repository
-	redis     *redis.Client
-	processor Processor
+	payments    PaymentRepository
+	audit       AuditStore
+	merchants   *merchant.Repository
+	redis       *redis.Client
+	cardNetwork CardNetwork
 }
 
-func NewService(app PaymentRepository, ledger *LedgerRepository, merchants *merchant.Repository, rdb *redis.Client, processor Processor) *Service {
-	return &Service{app: app, ledger: ledger, merchants: merchants, redis: rdb, processor: processor}
+func NewService(payments PaymentRepository, audit AuditStore, merchants *merchant.Repository, rdb *redis.Client, cardNetwork CardNetwork) *Service {
+	return &Service{payments: payments, audit: audit, merchants: merchants, redis: rdb, cardNetwork: cardNetwork}
 }
 
 func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*Payment, error) {
-	existing, err := s.app.FindByIdem(ctx, merchantID, idemKey)
+	existing, err := s.payments.FindByIdem(ctx, merchantID, idemKey)
 	if existing != nil {
 		return nil, &ConflictError{Existing: existing}
 	}
@@ -46,14 +46,10 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		{
 			Name: "insert-payment",
 			Do: func(ctx context.Context) error {
-				return s.app.InsertPending(ctx, p)
+				return s.payments.InsertPending(ctx, p)
 			},
 			Compensate: func(c context.Context) error {
-				if err := p.TransitionTo(StatusFailed); err != nil {
-					return fmt.Errorf("payment: failed to transition to failed: %w", err)
-				}
-
-				if err := s.app.MarkFailed(ctx, p.ID); err != nil {
+				if err := s.payments.MarkFailed(c, p); err != nil {
 					return fmt.Errorf("payment: failed to mark failed: %w", err)
 				}
 
@@ -63,10 +59,10 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		{
 			Name: "insert-ledger",
 			Do: func(ctx context.Context) error {
-				return s.ledger.Insert(ctx, p.ID, p.Amount)
+				return s.audit.Insert(ctx, p.ID, p.Amount)
 			},
 			Compensate: func(c context.Context) error {
-				return s.ledger.MarkFailed(c, p.ID)
+				return s.audit.MarkFailed(c, p.ID)
 			},
 		},
 		{
@@ -74,7 +70,7 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 			// outcome returns InDoubtError so Run skips unwind entirely.
 			Name: "call-api",
 			Do: func(ctx context.Context) error {
-				return s.callProcessor(ctx, p, idemKey)
+				return s.callNetwork(ctx, p, idemKey)
 			},
 		},
 	}}.Run(ctx)
@@ -85,7 +81,7 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 				// Keep payment pending and ledger intact; queue for the
 				// batch. A failed enqueue is logged loudly — a future
 				// sweep over stale pendings is the fallback.
-				if qerr := s.app.EnqueueReconciliation(ctx, p.ID, idemKey, re.FailedStep, re.StepErr); qerr != nil {
+				if qerr := s.payments.EnqueueReconciliation(ctx, p.ID, idemKey, re.FailedStep, re.StepErr); qerr != nil {
 					slog.ErrorContext(ctx, "reconciliation enqueue failed",
 						slog.String("payment_id", p.ID), slog.String("error", qerr.Error()))
 				}
@@ -101,59 +97,68 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 	return p, nil
 }
 
-// callProcessor runs the external call (retries and per-call timeouts live
-// in the repository), then reconciles an ambiguous outcome via status
-// query. Terminal failures and confirmed absences are ordinary errors
-// (caller compensates); an unconfirmed outcome is InDoubtError (caller
-// keeps state for the batch).
-func (s *Service) callProcessor(ctx context.Context, p *Payment, idemKey string) error {
-	if s.processor == nil {
-		return errors.New("payment: processor not configured")
+// callNetwork runs authenticate (retries and per-call timeouts live in
+// the repository), reconciles an ambiguous auth outcome via GetPayment,
+// then captures. Terminal failures and confirmed absences are ordinary
+// errors (caller compensates); an unconfirmed outcome is InDoubtError
+// (caller keeps state for the batch).
+func (s *Service) callNetwork(ctx context.Context, p *Payment, idemKey string) error {
+	if s.cardNetwork == nil {
+		return errors.New("payment: card network not configured")
 	}
 
 	// authorize
-	err := s.processor.Call(ctx, p.ID, p.Amount, idemKey)
+	err := s.cardNetwork.Authenticate(ctx, p.ID, p.Amount, idemKey)
 	if err == nil {
-		if err := p.TransitionTo(StatusAuthorized); err != nil {
-			return err
-		}
-
-		if err := s.app.MarkAuthorized(ctx, p.ID); err != nil {
-			return err
-		}
-		p.Status = StatusAuthorized
-
-		return nil
+		return s.authorize(ctx, p)
 	}
-	if !s.processor.Retryable(err) {
+	if !s.cardNetwork.Retryable(err) {
 		return err
 	}
 
-	// capture: the network holds funds, settle via the confirmed state.
-	accepted, qerr := s.processor.Status(ctx, p.ID)
+	// reconcile the ambiguous auth via GetPayment.
+	_, status, qerr := s.cardNetwork.GetPayment(ctx, p.ID)
 	if qerr != nil {
 		return &saga.InDoubtError{Step: "call-api", Err: err}
 	}
-	if accepted {
-		if err := p.TransitionTo(StatusAuthorized); err != nil {
+	switch status {
+	case networkAccepted:
+		if err := s.authorize(ctx, p); err != nil {
 			return err
 		}
-
-		if err := s.app.MarkAuthorized(ctx, p.ID); err != nil {
-			return err
-		}
-		p.Status = StatusAuthorized
-
-		if err := p.TransitionTo(StatusCaptured); err != nil {
-			return err
-		}
-
-		if err := s.app.MarkCaptured(ctx, p.ID); err != nil {
-			return err
-		}
-		p.Status = StatusCaptured
-
-		return nil
+		return s.capture(ctx, p, idemKey)
+	case networkRejected:
+		return fmt.Errorf("payment: card network did not accept %s: %w", p.ID, err)
+	default:
+		return &saga.InDoubtError{Step: "call-api", Err: err}
 	}
-	return fmt.Errorf("payment: processor did not accept %s: %w", p.ID, err)
+}
+
+// authorize moves a locally pending payment to authorized after the
+// network confirms funds held.
+func (s *Service) authorize(ctx context.Context, p *Payment) error {
+	if err := s.payments.MarkAuthorized(ctx, p); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// capture settles an authorized payment through the network, then marks
+// it captured. A retryable capture failure is in-doubt: the payment
+// status query cannot confirm capture state, so the payment stays
+// authorized with ledger intact for the batch.
+func (s *Service) capture(ctx context.Context, p *Payment, idemKey string) error {
+	if err := s.cardNetwork.Capture(ctx, p.ID, p.Amount, idemKey); err != nil {
+		if !s.cardNetwork.Retryable(err) {
+			return fmt.Errorf("payment: capture %s refused: %w", p.ID, err)
+		}
+		return &saga.InDoubtError{Step: "call-api", Err: err}
+	}
+
+	if err := s.payments.MarkCaptured(ctx, p); err != nil {
+		return err
+	}
+
+	return nil
 }

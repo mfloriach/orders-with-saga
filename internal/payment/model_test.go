@@ -5,7 +5,7 @@ import "testing"
 // TestCheckTransition covers every legal edge plus illegal and unknown
 // states. The table is the spec; keep it in sync with the migration.
 func TestCheckTransition(t *testing.T) {
-	legal := [][2]string{
+	legal := [][2]Status{
 		{StatusPending, StatusAuthorized},
 		{StatusPending, StatusFailed},
 		{StatusAuthorized, StatusFailed},
@@ -17,7 +17,7 @@ func TestCheckTransition(t *testing.T) {
 		}
 	}
 
-	illegal := [][2]string{
+	illegal := [][2]Status{
 		{StatusPending, StatusPending},
 		{StatusPending, StatusCaptured},
 		{StatusFailed, StatusAuthorized},
@@ -29,9 +29,9 @@ func TestCheckTransition(t *testing.T) {
 		{StatusCaptured, StatusAuthorized},
 		{StatusCaptured, StatusCaptured},
 		{StatusCaptured, StatusFailed},
-		{"bogus", StatusFailed},
-		{StatusPending, "bogus"},
-		{"", ""},
+		{Status("bogus"), StatusFailed},
+		{StatusPending, Status("bogus")},
+		{Status(""), Status("")},
 	}
 	for _, tc := range illegal {
 		if err := (&Payment{Status: tc[0]}).TransitionTo(tc[1]); err == nil {

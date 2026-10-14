@@ -1,4 +1,4 @@
-package payment
+package repositories
 
 import (
 	"context"
@@ -8,18 +8,18 @@ import (
 	"github.com/google/uuid"
 )
 
-type LedgerRepository struct{ db *sql.DB }
+type AuditRepository struct{ db *sql.DB }
 
-func NewLedgerRepository(db *sql.DB) *LedgerRepository { return &LedgerRepository{db} }
+func NewAuditRepository(db *sql.DB) *AuditRepository { return &AuditRepository{db} }
 
-func (r *LedgerRepository) Insert(ctx context.Context, paymentID string, amount int64) error {
+func (r *AuditRepository) Insert(ctx context.Context, paymentID string, amount int64) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO ledger_entries (id, payment_id, amount) VALUES ($1,$2,$3)`,
 		uuid.NewString(), paymentID, amount)
 	return err
 }
 
-func (r *LedgerRepository) MarkFailed(ctx context.Context, id string) error {
+func (r *AuditRepository) MarkFailed(ctx context.Context, id string) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE ledger_entries
 		SET status = 'failed'

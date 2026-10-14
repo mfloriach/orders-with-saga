@@ -1,4 +1,4 @@
-package payment
+package repositories
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"paymentgateway/internal/payment"
 	"paymentgateway/pkg/apiclient"
 )
 
@@ -31,12 +32,6 @@ type MasterCardConfig struct {
 // retries) when OverallTimeout is unset.
 const defaultOverallTimeout = 10 * time.Second
 
-// Assumed simulator statuses (confirm in review).
-const (
-	mcStatusAccepted = "accepted"
-	mcStatusRejected = "rejected"
-)
-
 // httpError carries a non-2xx network status for Retryable classification.
 type httpError struct {
 	StatusCode int
@@ -47,14 +42,14 @@ func (e *httpError) Error() string {
 	return fmt.Sprintf("mastercard: unexpected status %d: %s", e.StatusCode, e.Body)
 }
 
-// MasterCardRepository implements Processor against the card-network
-// simulator. It satisfies Processor at compile time.
+// MasterCardRepository implements CardNetwork against the card-network
+// simulator. It satisfies CardNetwork at compile time.
 type MasterCardRepository struct {
 	client *apiclient.Client
 	cfg    MasterCardConfig
 }
 
-var _ Processor = (*MasterCardRepository)(nil)
+var _ payment.CardNetwork = (*MasterCardRepository)(nil)
 
 func NewMasterCardRepository(client *apiclient.Client, cfg MasterCardConfig) *MasterCardRepository {
 	if cfg.OverallTimeout <= 0 {
@@ -123,9 +118,10 @@ func statusError(resp *http.Response) error {
 	return &httpError{StatusCode: resp.StatusCode, Body: string(body)}
 }
 
-// Call authorizes via idempotent PUT; the client retries transient
-// failures internally, so one Call covers the whole attempt budget.
-func (r *MasterCardRepository) Call(ctx context.Context, paymentID string, amount int64, idemKey string) error {
+// Authenticate holds funds via idempotent PUT; the client retries
+// transient failures internally, so one call covers the whole attempt
+// budget.
+func (r *MasterCardRepository) Authenticate(ctx context.Context, paymentID string, amount int64, idemKey string) error {
 	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
 		return err
@@ -148,10 +144,9 @@ func (r *MasterCardRepository) Call(ctx context.Context, paymentID string, amoun
 	return err
 }
 
-// Status maps the network state: accepted→true, rejected→false, anything
-// else (including transport errors) is an error so the caller reconciles
-// via the in-doubt path instead of compensating a live payment.
-func (r *MasterCardRepository) Status(ctx context.Context, paymentID string) (bool, error) {
+// GetPayment fetches the remote (id, status) without interpreting it;
+// callers map the simulator vocabulary (accepted/rejected/...) themselves.
+func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string) (string, string, error) {
 	ctx, cancel := r.withOverallTimeout(ctx)
 	defer cancel()
 	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
@@ -159,58 +154,42 @@ func (r *MasterCardRepository) Status(ctx context.Context, paymentID string) (bo
 	}, r.policy())
 
 	if err != nil {
-		return false, err
+		return "", "", err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, statusError(resp)
+		return "", "", statusError(resp)
 	}
 
-	_, status, err := decodePayment(resp)
-	if err != nil {
-		return false, err
-	}
-
-	switch status {
-	case mcStatusAccepted:
-		return true, nil
-	case mcStatusRejected:
-		return false, nil
-	default:
-		return false, fmt.Errorf("mastercard: unconfirmed status %q", status)
-	}
+	return decodePayment(resp)
 }
 
-// CreatePayment creates by idempotency key (key-based flow; unused by
-// Create today, which authorizes via idempotent PUT).
-func (r *MasterCardRepository) CreatePayment(ctx context.Context, amount int64, idemKey string) (string, error) {
-	body, err := json.Marshal(map[string]any{"amount": amount})
+// Capture settles a previously authenticated payment via idempotent POST;
+// the client retries transient failures internally, so one call covers
+// the whole attempt budget.
+func (r *MasterCardRepository) Capture(ctx context.Context, paymentID string, amount int64, idemKey string) error {
+	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	ctx, cancel := r.withOverallTimeout(ctx)
 	defer cancel()
 	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		req, err := r.authed(ctx, http.MethodPost, r.cfg.BaseURL+"/payment", body)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Idempotency-Key", idemKey)
-		return req, nil
+		return r.authed(ctx, http.MethodPost, r.cfg.BaseURL+"/payment/"+paymentID+"/capture", body)
 	}, r.policy())
 
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", statusError(resp)
+		return statusError(resp)
 	}
 
-	id, _, err := decodePayment(resp)
+	_, _, err = decodePayment(resp)
 
-	return id, err
+	return err
 }
 
 // Retryable classifies errors for the seam: transport transients and 5xx

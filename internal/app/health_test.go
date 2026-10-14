@@ -67,15 +67,15 @@ func TestHealthUnchanged(t *testing.T) {
 	}
 }
 
-// TestMastercardProcessorWiring verifies wiring builds without dialing.
+// TestMastercardNetworkWiring verifies wiring builds without dialing.
 // Unconfigured base still builds; the failure surfaces at call time
 // (fail-closed downstream), never at boot.
-func TestMastercardProcessorWiring(t *testing.T) {
-	p, err := mastercardProcessor(config.Config{})
+func TestMastercardNetworkWiring(t *testing.T) {
+	p, err := cardNetwork(config.Config{})
 	if err != nil || p == nil {
 		t.Fatalf("unset: got %v %v", p, err)
 	}
-	p, err = mastercardProcessor(config.Config{MCBaseURL: "http://mc:8080", MCAPIKey: "k"})
+	p, err = cardNetwork(config.Config{MCBaseURL: "http://mc:8080", MCAPIKey: "k"})
 	if err != nil || p == nil {
 		t.Fatalf("got %v %v", p, err)
 	}

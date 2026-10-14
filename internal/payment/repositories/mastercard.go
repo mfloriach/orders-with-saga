@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"paymentgateway/internal/payment"
 	"paymentgateway/pkg/apiclient"
 )
 
@@ -48,8 +47,6 @@ type MasterCardRepository struct {
 	client *apiclient.Client
 	cfg    MasterCardConfig
 }
-
-var _ payment.CardNetwork = (*MasterCardRepository)(nil)
 
 func NewMasterCardRepository(client *apiclient.Client, cfg MasterCardConfig) *MasterCardRepository {
 	if cfg.OverallTimeout <= 0 {

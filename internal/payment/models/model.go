@@ -1,9 +1,12 @@
-package payment
+package models
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
+
+var ErrConflict = errors.New("idempotency_conflict")
 
 type Payment struct {
 	ID             string    `json:"id"`

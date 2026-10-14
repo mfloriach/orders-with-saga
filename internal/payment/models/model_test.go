@@ -1,6 +1,8 @@
-package payment
+package models
 
-import "testing"
+import (
+	"testing"
+)
 
 // TestCheckTransition covers every legal edge plus illegal and unknown
 // states. The table is the spec; keep it in sync with the migration.

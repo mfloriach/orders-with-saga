@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"paymentgateway/internal/payment"
+	"paymentgateway/internal/payment/models"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,25 +18,28 @@ func NewPaymentDatabaseRepository(db *sql.DB) *PaymentDatabaseRepository {
 	return &PaymentDatabaseRepository{db}
 }
 
-func (r *PaymentDatabaseRepository) InsertPending(ctx context.Context, p *payment.Payment) error {
+func (r *PaymentDatabaseRepository) InsertPending(ctx context.Context, p *models.Payment) error {
 	p.ID = uuid.NewString()
-	p.Status = payment.StatusPending
+	p.Status = models.StatusPending
+
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO payments (id, merchant_id, amount, idempotency_key, status) VALUES ($1,$2,$3,$4,$5)`,
 		p.ID, p.MerchantID, p.Amount, p.IdempotencyKey, p.Status)
+
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return payment.ErrConflict
+			return models.ErrConflict
 		}
 		return err
 	}
+
 	return r.db.QueryRowContext(ctx,
 		`SELECT created_at FROM payments WHERE id=$1`, p.ID).Scan(&p.CreatedAt)
 }
 
-func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, key string) (*payment.Payment, error) {
-	var p payment.Payment
+func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, key string) (*models.Payment, error) {
+	var p models.Payment
 	var status string
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, merchant_id, amount, idempotency_key, status, created_at FROM payments WHERE merchant_id=$1 AND idempotency_key=$2`,
@@ -44,7 +47,7 @@ func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	p.Status = payment.Status(status)
+	p.Status = models.Status(status)
 	return &p, err
 }
 
@@ -62,8 +65,8 @@ func (r *PaymentDatabaseRepository) EnqueueReconciliation(ctx context.Context, p
 	return err
 }
 
-func (r *PaymentDatabaseRepository) MarkFailed(ctx context.Context, p *payment.Payment) error {
-	p.Status = payment.StatusFailed
+func (r *PaymentDatabaseRepository) MarkFailed(ctx context.Context, p *models.Payment) error {
+	p.Status = models.StatusFailed
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'failed'
@@ -89,8 +92,8 @@ func (r *PaymentDatabaseRepository) MarkFailed(ctx context.Context, p *payment.P
 // MarkAuthorized moves a pending payment to authorized. The pending
 // precondition makes double-marking fail loudly instead of rewriting
 // history.
-func (r *PaymentDatabaseRepository) MarkAuthorized(ctx context.Context, p *payment.Payment) error {
-	p.Status = payment.StatusAuthorized
+func (r *PaymentDatabaseRepository) MarkAuthorized(ctx context.Context, p *models.Payment) error {
+	p.Status = models.StatusAuthorized
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'authorized'
@@ -113,8 +116,8 @@ func (r *PaymentDatabaseRepository) MarkAuthorized(ctx context.Context, p *payme
 	return nil
 }
 
-func (r *PaymentDatabaseRepository) MarkCaptured(ctx context.Context, p *payment.Payment) error {
-	p.Status = payment.StatusCaptured
+func (r *PaymentDatabaseRepository) MarkCaptured(ctx context.Context, p *models.Payment) error {
+	p.Status = models.StatusCaptured
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'captured'

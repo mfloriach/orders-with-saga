@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"paymentgateway/internal/merchant"
+	"paymentgateway/internal/payment/models"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/idempotency"
 	"paymentgateway/pkg/validate"
@@ -19,7 +20,7 @@ type Handler struct{ svc creator }
 // The raw Idempotency-Key header is passed through; key resolution lives
 // in the service.
 type creator interface {
-	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*Payment, error)
+	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error)
 }
 
 func NewHandler(svc creator) *Handler { return &Handler{svc} }

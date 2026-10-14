@@ -12,6 +12,7 @@ import (
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
+	"paymentgateway/internal/payment/models"
 	"paymentgateway/internal/payment/repositories"
 	"paymentgateway/pkg/apiclient"
 	"paymentgateway/pkg/logging"
@@ -100,7 +101,7 @@ func Build(cfg config.Config) (*Container, error) {
 // cardNetwork builds the card-network client when configured.
 // Empty base URL keeps the nil network (Create fails closed); a base
 // URL without key is a boot error.
-func cardNetwork(cfg config.Config) (payment.CardNetwork, error) {
+func cardNetwork(cfg config.Config) (models.CardNetwork, error) {
 	return repositories.NewMasterCardRepository(
 		apiclient.New(nil),
 		repositories.MasterCardConfig{

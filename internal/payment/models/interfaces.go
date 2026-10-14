@@ -1,11 +1,6 @@
-package payment
+package models
 
-import (
-	"context"
-	"errors"
-)
-
-var ErrConflict = errors.New("idempotency_conflict")
+import "context"
 
 type PaymentRepository interface {
 	InsertPending(ctx context.Context, p *Payment) error
@@ -36,15 +31,15 @@ type CardNetwork interface {
 	// GetPayment reports the remote (id, status) for paymentID without
 	// interpreting it; callers map the simulator vocabulary themselves.
 	GetPayment(ctx context.Context, paymentID string) (id, status string, err error)
-	// Retryable reports whether err is transient (timeout, network, 5xx).
-	// Business refusals (4xx) are never retryable.
-	Retryable(err error) bool
 }
+
+type NetworkStatus string
 
 // Network statuses returned by CardNetwork.GetPayment. They mirror the
 // simulator vocabulary decoded in the repositories implementation; keep
 // both in sync.
 const (
-	networkAccepted = "accepted"
-	networkRejected = "rejected"
+	NetworkAccepted NetworkStatus = "accepted"
+	NetworkRejected NetworkStatus = "rejected"
+	NetworkCaptured NetworkStatus = "captured"
 )

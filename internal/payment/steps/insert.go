@@ -17,8 +17,8 @@ func (s PendingPayment) Run(p *models.Payment) saga.Step {
 		Do: func(ctx context.Context) error {
 			return s.Payments.InsertPending(ctx, p)
 		},
-		Compensate: func(c context.Context) error {
-			if err := s.Payments.MarkFailed(c, p); err != nil {
+		Compensate: func(ctx context.Context) error {
+			if err := s.Payments.MarkFailed(ctx, p); err != nil {
 				return fmt.Errorf("payment: failed to mark failed: %w", err)
 			}
 

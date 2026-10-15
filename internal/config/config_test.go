@@ -9,9 +9,10 @@ import (
 
 func withEnv(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, k := range []string{"PORT", "APP_DSN", "LEDGER_DSN", "REDIS_ADDR", "RATE_LIMIT", "RATE_WINDOW_SEC",
+	for _, k := range []string{"PORT", "APP_DSN", "LEDGER_DSN", "REDIS_ADDR", "RABBITMQ_URL", "RATE_LIMIT", "RATE_WINDOW_SEC",
 		"PG_MAX_OPEN", "PG_MAX_IDLE", "PG_MAX_LIFETIME_SEC", "PG_MAX_IDLE_SEC", "PG_CONNECT_TIMEOUT_SEC",
 		"REDIS_POOL_SIZE", "REDIS_DIAL_TIMEOUT_SEC", "REDIS_READ_TIMEOUT_SEC", "REDIS_WRITE_TIMEOUT_SEC",
+		"RABBITMQ_MAX_ATTEMPTS", "RABBITMQ_RETRY_TTL_MS",
 		"MC_BASE_URL", "MC_API_KEY", "MC_TIMEOUT_SEC", "MC_MAX_ATTEMPTS", "MC_BASE_BACKOFF_MS", "MC_MAX_BACKOFF_MS", "MC_OVERALL_TIMEOUT_SEC"} {
 		v, ok := env[k]
 		if !ok || v == "" {
@@ -24,9 +25,10 @@ func withEnv(t *testing.T, env map[string]string) {
 
 func TestLoad(t *testing.T) {
 	valid := map[string]string{
-		"APP_DSN":    "postgres://app:app@localhost:5432/app?sslmode=disable",
-		"LEDGER_DSN": "postgres://ledger:ledger@localhost:5433/ledger?sslmode=disable",
-		"REDIS_ADDR": "localhost:6379",
+		"APP_DSN":      "postgres://app:app@localhost:5432/app?sslmode=disable",
+		"LEDGER_DSN":   "postgres://ledger:ledger@localhost:5433/ledger?sslmode=disable",
+		"REDIS_ADDR":   "localhost:6379",
+		"RABBITMQ_URL": "amqp://app:app@localhost:5672/",
 	}
 	cases := []struct {
 		name    string
@@ -36,6 +38,7 @@ func TestLoad(t *testing.T) {
 		{"valid minimal", valid, ""},
 		{"valid with overrides", merge(valid, map[string]string{"PORT": "9000", "RATE_LIMIT": "50"}), ""},
 		{"missing app DSN", merge(valid, map[string]string{"APP_DSN": ""}), "AppDSN"},
+		{"missing rabbitmq URL", merge(valid, map[string]string{"RABBITMQ_URL": ""}), "AMQPURL"},
 		{"bad port", merge(valid, map[string]string{"PORT": "abc"}), "PORT"},
 		{"zero rate limit", merge(valid, map[string]string{"RATE_LIMIT": "0"}), "RateLimit"},
 		{"zero pg max open", merge(valid, map[string]string{"PG_MAX_OPEN": "0"}), "PGMaxOpen"},
@@ -44,6 +47,8 @@ func TestLoad(t *testing.T) {
 		{"zero mc timeout", merge(valid, map[string]string{"MC_TIMEOUT_SEC": "0"}), "MCTimeout"},
 		{"zero mc attempts", merge(valid, map[string]string{"MC_MAX_ATTEMPTS": "0"}), "MCMaxAttempts"},
 		{"zero mc overall timeout", merge(valid, map[string]string{"MC_OVERALL_TIMEOUT_SEC": "0"}), "MCOverallTimeout"},
+		{"zero rabbitmq attempts", merge(valid, map[string]string{"RABBITMQ_MAX_ATTEMPTS": "0"}), "AMQPMaxAttempts"},
+		{"zero rabbitmq retry TTL", merge(valid, map[string]string{"RABBITMQ_RETRY_TTL_MS": "0"}), "AMQPRetryTTL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,7 +83,7 @@ func merge(base, over map[string]string) map[string]string {
 
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
-	content := "# comment\nAPP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nPORT=9001\n\n"
+	content := "# comment\nAPP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nRABBITMQ_URL=amqp://file-rabbit:5672/\nPORT=9001\n\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +99,7 @@ func TestLoadFromFile(t *testing.T) {
 
 func TestEnvWinsOverFile(t *testing.T) {
 	dir := t.TempDir()
-	content := "APP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nPORT=9001\n"
+	content := "APP_DSN=postgres://file/app\nLEDGER_DSN=postgres://file/ledger\nREDIS_ADDR=file-redis:6379\nRABBITMQ_URL=amqp://file-rabbit:5672/\nPORT=9001\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}

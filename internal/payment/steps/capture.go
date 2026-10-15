@@ -29,7 +29,7 @@ func (s Capture) Run(p *models.Payment) saga.Step {
 		Compensate: func(ctx context.Context) error {
 			_, status, err := s.CardNetwork.GetPayment(ctx, p.ID)
 			if err != nil {
-				return &saga.InDoubtError{Step: "capture", Err: err}
+				return &saga.InDoubtError{Step: "capture", Err: fmt.Errorf("payment: could not get payment %s: %w", p.ID, err)}
 			}
 
 			switch models.NetworkStatus(status) {

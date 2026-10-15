@@ -42,7 +42,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	idemKey := c.Get("Idempotency-Key", idempotency.GenerateKey(c.Request().RequestURI()))
 
 	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, idemKey)
-	var ce *ConflictError
+	var ce *models.ConflictError
 	switch {
 	case errors.Is(err, merchant.ErrNotFound):
 		return apperr.MerchantNotFound()

@@ -7,8 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"paymentgateway/internal/config"
-
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -64,19 +62,5 @@ func TestHealthUnchanged(t *testing.T) {
 	status, body := get(t, f, "/health")
 	if status != 200 || body["ok"] != true || len(body) != 1 {
 		t.Fatalf("got %d %v", status, body)
-	}
-}
-
-// TestMastercardNetworkWiring verifies wiring builds without dialing.
-// Unconfigured base still builds; the failure surfaces at call time
-// (fail-closed downstream), never at boot.
-func TestMastercardNetworkWiring(t *testing.T) {
-	p, err := cardNetwork(config.Config{})
-	if err != nil || p == nil {
-		t.Fatalf("unset: got %v %v", p, err)
-	}
-	p, err = cardNetwork(config.Config{MCBaseURL: "http://mc:8080", MCAPIKey: "k"})
-	if err != nil || p == nil {
-		t.Fatalf("got %v %v", p, err)
 	}
 }

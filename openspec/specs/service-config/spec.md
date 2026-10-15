@@ -7,7 +7,7 @@ Ensures the service boots only with valid configuration, failing fast with a cle
 ## Requirements
 
 ### Requirement: Required connection vars enforced
-The system SHALL refuse to boot when `APP_DSN`, `LEDGER_DSN`, or `REDIS_ADDR` is missing or empty, exiting non-zero before binding any port.
+The system SHALL refuse to boot when `APP_DSN`, `LEDGER_DSN`, `REDIS_ADDR`, or `RABBITMQ_URL` is missing or empty, exiting non-zero before binding any port.
 
 #### Scenario: Missing app DSN
 - **WHEN** the service starts without `APP_DSN` set
@@ -16,6 +16,10 @@ The system SHALL refuse to boot when `APP_DSN`, `LEDGER_DSN`, or `REDIS_ADDR` is
 #### Scenario: Typo in var name
 - **WHEN** the operator sets `APP_DNS` (typo) while `APP_DSN` is absent
 - **THEN** startup fails naming `AppDSN` instead of silently using a localhost default
+
+#### Scenario: Missing RabbitMQ URL
+- **WHEN** the service starts without `RABBITMQ_URL` set
+- **THEN** it exits non-zero, logs an error naming the RabbitMQ URL field, and binds no port
 
 ### Requirement: Invalid values rejected
 The system SHALL refuse to boot when `PORT` is non-numeric or out of range, or when rate-limit values are not positive integers.
@@ -47,10 +51,10 @@ The system SHALL accept pool and timeout tuning via environment with safe defaul
 - **THEN** it exits non-zero and logs an error naming the offending field, binding no port
 
 ### Requirement: Fail-fast dependency check
-The system SHALL verify both Postgres pools and Redis are reachable during boot and refuse to serve when any dependency is down.
+The system SHALL verify both Postgres pools, Redis, and RabbitMQ are reachable during boot and refuse to serve when any dependency is down.
 
 #### Scenario: Dependency down at boot
-- **WHEN** the service starts while a database or Redis is unreachable
+- **WHEN** the service starts while a database, Redis, or RabbitMQ is unreachable
 - **THEN** it exits non-zero, logs an error naming the dependency, and binds no port
 
 ### Requirement: Readiness endpoint
@@ -65,11 +69,11 @@ The system SHALL expose `GET /ready` reporting per-dependency reachability while
 - **THEN** it returns `503` naming the failing dependency, while `GET /health` still returns `200`
 
 ### Requirement: Full pool shutdown
-The system SHALL close Redis and both database pools on shutdown after the server stops accepting traffic.
+The system SHALL close the AMQP connection, Redis, and both database pools on shutdown after the server stops accepting traffic.
 
 #### Scenario: Graceful shutdown
 - **WHEN** the process receives SIGINT or SIGTERM
-- **THEN** it stops accepting traffic, closes Redis and both pools, flushes telemetry, and exits
+- **THEN** it stops accepting traffic, closes the AMQP connection, Redis and both pools, flushes telemetry, and exits
 
 ### Requirement: Card-network configuration
 The system SHALL accept optional card-network settings with safe defaults, validate them at boot, and preserve current behavior when the network is unconfigured.

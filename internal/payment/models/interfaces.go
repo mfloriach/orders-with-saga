@@ -1,6 +1,8 @@
 package models
 
-import "context"
+import (
+	"context"
+)
 
 type PaymentRepository interface {
 	InsertPending(ctx context.Context, p *Payment) error
@@ -43,3 +45,7 @@ const (
 	NetworkRejected NetworkStatus = "rejected"
 	NetworkCaptured NetworkStatus = "captured"
 )
+
+type ConflictError struct{ Existing *Payment }
+
+func (e *ConflictError) Error() string { return "idempotency_conflict" }

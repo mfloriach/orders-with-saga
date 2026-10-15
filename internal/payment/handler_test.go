@@ -75,7 +75,7 @@ func TestCreateErrors(t *testing.T) {
 			"idempotency conflict",
 			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
 			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
-				return nil, &ConflictError{Existing: &models.Payment{ID: "pid-9", IdempotencyKey: "k-1"}}
+				return nil, &models.ConflictError{Existing: &models.Payment{ID: "pid-9", IdempotencyKey: "k-1"}}
 			},
 			409, "idempotency_conflict", "pid-9",
 		},

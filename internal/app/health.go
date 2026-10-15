@@ -45,5 +45,6 @@ func readyChecks(cnt *Container) map[string]func(ctx context.Context) error {
 		"app_db":    cnt.AppDB.PingContext,
 		"ledger_db": cnt.LedgerDB.PingContext,
 		"redis":     func(ctx context.Context) error { return cnt.Redis.Ping(ctx).Err() },
+		"rabbitmq":  func(ctx context.Context) error { return cnt.Broker.Ping(ctx) },
 	}
 }

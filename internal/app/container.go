@@ -26,6 +26,7 @@ type Container struct {
 	AppDB    *sql.DB
 	LedgerDB *sql.DB
 	Redis    *redis.Client
+	Broker   *Broker
 	Logger   *slog.Logger
 	Tracer   *sdktrace.TracerProvider
 	Config   config.Config
@@ -43,6 +44,9 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	}
 	c.closed = true
 	var errs []error
+	if err := c.Broker.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close rabbitmq: %w", err))
+	}
 	if err := c.Redis.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close redis: %w", err))
 	}
@@ -82,6 +86,14 @@ func Build(cfg config.Config) (*Container, error) {
 		return nil, err
 	}
 
+	broker, err := OpenBroker(cfg)
+	if err != nil {
+		appDB.Close()
+		ledgerDB.Close()
+		rdb.Close()
+		return nil, err
+	}
+
 	logger := logging.New(os.Stdout)
 	slog.SetDefault(logger)
 	tp := tracing.Init()
@@ -92,10 +104,10 @@ func Build(cfg config.Config) (*Container, error) {
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
 	pLedger := repositories.NewAuditRepository(ledgerDB)
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network)
+	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network, NewWebhookPublisher(broker))
 	pH := payment.NewHandler(pSvc)
 
-	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
+	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Broker: broker, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
 }
 
 // cardNetwork builds the card-network client when configured.

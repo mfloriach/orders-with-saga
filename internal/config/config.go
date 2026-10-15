@@ -14,6 +14,7 @@ type Config struct {
 	AppDSN     string `env:"APP_DSN" env-required:"true" validate:"required"`
 	LedgerDSN  string `env:"LEDGER_DSN" env-required:"true" validate:"required"`
 	RedisAddr  string `env:"REDIS_ADDR" env-required:"true" validate:"required"`
+	AMQPURL   string `env:"RABBITMQ_URL" env-required:"true" validate:"required"`
 	RateLimit  int    `env:"RATE_LIMIT" env-default:"100" validate:"gt=0"`
 	RateWindow int    `env:"RATE_WINDOW_SEC" env-default:"60" validate:"gt=0"`
 
@@ -27,6 +28,9 @@ type Config struct {
 	RedisDialTimeout  int `env:"REDIS_DIAL_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
 	RedisReadTimeout  int `env:"REDIS_READ_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
 	RedisWriteTimeout int `env:"REDIS_WRITE_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
+
+	AMQPMaxAttempts int `env:"RABBITMQ_MAX_ATTEMPTS" env-default:"5" validate:"gt=0"`
+	AMQPRetryTTL    int `env:"RABBITMQ_RETRY_TTL_MS" env-default:"1000" validate:"gt=0"`
 
 	MCBaseURL        string `env:"MC_BASE_URL" env-default:""`
 	MCAPIKey         string `env:"MC_API_KEY" env-default:""`

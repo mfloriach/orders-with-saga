@@ -3,9 +3,10 @@ package saga
 import "fmt"
 
 // RunError is the failure result. Completed holds executed step names in
-// order — the resume set a future reconciler persists. InDoubt reports the
-// failure is unconfirmed and no compensation ran. Compensation itself runs
-// in the background after Run returns; its errors are logged, not returned.
+// order — the unwind plan the caller queues for a worker. InDoubt reports
+// the failure is unconfirmed and no compensation is owed. Compensation
+// itself runs in the worker after Run returns; its errors are worker logs,
+// not returned.
 type RunError struct {
 	SagaID     string
 	SagaName   string
@@ -20,7 +21,7 @@ func (e *RunError) Error() string {
 		return fmt.Sprintf("saga %s: step %s in-doubt: %v (no compensation ran)",
 			e.SagaID, e.FailedStep, e.StepErr)
 	}
-	return fmt.Sprintf("saga %s: step %s failed: %v (compensation runs in background)",
+	return fmt.Sprintf("saga %s: step %s failed: %v (unwind queued)",
 		e.SagaID, e.FailedStep, e.StepErr)
 }
 func (e *RunError) Unwrap() error { return e.StepErr }

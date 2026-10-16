@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/saga"
 )
@@ -12,38 +13,38 @@ type Capture struct {
 	CardNetwork domain.CardNetwork
 }
 
-func (s Capture) Run(p *domain.Payment) saga.Step {
-	return saga.Step{
-		Name: "call-api-capture",
-		Do: func(ctx context.Context) error {
-			if err := s.CardNetwork.Capture(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
-				return &saga.InDoubtError{Step: "capture", Err: err}
-			}
+func (s Capture) Name() string { return "capture" }
 
-			if err := s.Payments.MarkCaptured(ctx, p); err != nil {
-				return fmt.Errorf("payment: failed to mark captured: %w", err)
-			}
+func (s Capture) Do(ctx context.Context, p *domain.Payment) error {
+	if err := s.CardNetwork.Capture(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
+		return &saga.InDoubtError{Step: "capture", Err: err}
+	}
 
-			return nil
-		},
-		Compensate: func(ctx context.Context) error {
-			_, status, err := s.CardNetwork.GetPayment(ctx, p.ID)
-			if err != nil {
-				return &saga.InDoubtError{Step: "capture", Err: fmt.Errorf("payment: could not get payment %s: %w", p.ID, err)}
-			}
+	if err := s.Payments.MarkCaptured(ctx, p); err != nil {
+		return fmt.Errorf("payment: failed to mark captured: %w", err)
+	}
 
-			switch domain.NetworkStatus(status) {
-			case domain.NetworkCaptured:
-				if err := s.Payments.MarkCaptured(ctx, p); err != nil {
-					return fmt.Errorf("payment: failed to mark captured: %w", err)
-				}
+	return nil
+}
 
-				return nil
-			case domain.NetworkRejected:
-				return fmt.Errorf("payment: card network did not accept %s: %w", p.ID, err)
-			default:
-				return &saga.InDoubtError{Step: "capture", Err: err}
-			}
-		},
+func (s Capture) Compensate(ctx context.Context, p *domain.Payment) error {
+	_, status, err := s.CardNetwork.GetPayment(ctx, p.ID)
+	if err != nil {
+		return &saga.InDoubtError{Step: "capture", Err: fmt.Errorf("payment: could not get payment %s: %w", p.ID, err)}
+	}
+
+	switch domain.NetworkStatus(status) {
+	case domain.NetworkCaptured:
+		// return markApplied(ctx, s.Payments, p, domain.StatusCaptured, s.Payments.MarkCaptured)
+		return nil
+	case domain.NetworkRejected:
+		// Terminal refusal: nothing to reconcile. Log it and let
+		// the unwind converge — downstream steps (mark failed)
+		// still run this attempt.
+		slog.InfoContext(ctx, "payment: capture nothing to reconcile, remote refused",
+			slog.String("payment_id", p.ID))
+		return nil
+	default:
+		return &saga.InDoubtError{Step: "capture", Err: err}
 	}
 }

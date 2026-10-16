@@ -2,27 +2,19 @@ package steps
 
 import (
 	"context"
-	"fmt"
 	"paymentgateway/internal/domain"
-	"paymentgateway/pkg/saga"
 )
 
 type PendingPayment struct {
 	Payments domain.PaymentRepository
 }
 
-func (s PendingPayment) Run(p *domain.Payment) saga.Step {
-	return saga.Step{
-		Name: "insert-payment",
-		Do: func(ctx context.Context) error {
-			return s.Payments.InsertPending(ctx, p)
-		},
-		Compensate: func(ctx context.Context) error {
-			if err := s.Payments.MarkFailed(ctx, p); err != nil {
-				return fmt.Errorf("payment: failed to mark failed: %w", err)
-			}
+func (s PendingPayment) Name() string { return "insert-payment" }
 
-			return nil
-		},
-	}
+func (s PendingPayment) Do(ctx context.Context, p *domain.Payment) error {
+	return s.Payments.InsertPending(ctx, p)
+}
+
+func (s PendingPayment) Compensate(ctx context.Context, p *domain.Payment) error {
+	return s.Payments.MarkFailed(ctx, p)
 }

@@ -1,16 +1,16 @@
-// Package saga runs sequential steps with reverse compensation.
+// Package saga runs sequential steps with reverse compensation planned,
+// not executed.
 //
 // Sequential only: no parallel branches, no retries, no durable log.
-// On step failure Run returns immediately and completed steps are
-// compensated in reverse order in the background, best-effort:
-// compensation errors are logged and unwinding continues.
+// On step failure Run returns the failure immediately along with the
+// unwind plan (completed step names in order); the caller queues that
+// plan for a worker. Run itself never compensates.
 package saga
 
 import (
 	"context"
 	"errors"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -19,165 +19,143 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// DefaultCompensateTimeout bounds compensations detached from a cancelled caller ctx.
-const DefaultCompensateTimeout = 5 * time.Second
-
 // Step is one unit of work. Name is a stable identifier (used in results,
 // logs and spans). Compensate undoes Do and may be nil when there is
 // nothing to undo.
-type Step struct {
-	Name       string
-	Do         func(ctx context.Context) error
-	Compensate func(ctx context.Context) error
+type Step[T any] interface {
+	Name() string
+	Do(context.Context, *T) error
+	Compensate(context.Context, *T) error
 }
 
-// Saga is a named sequential step list. ID defaults to a uuid at Run.
-// Logger defaults to slog.Default, TracerName to "pkg/saga".
-// CompensateTimeout bounds compensations when the caller ctx is cancelled.
-// OnStep observes every executed step synchronously with its result; it
-// returns nothing and cannot fail the saga.
-type Saga struct {
-	ID                string
-	Name              string
-	Steps             []Step
-	Logger            *slog.Logger
-	TracerName        string
-	CompensateTimeout time.Duration
-	OnStep            func(ctx context.Context, sagaID, step string, err error)
+// Saga is a named sequential step list. Build it with New, which
+// guarantees a uuid ID plus non-nil logger and tracer (customizable via
+// options). ID, Name and Steps stay exported; logger and tracer are set
+// via options. Literals bypassing New still run: Run falls back to the
+// same defaults.
+type Saga[T any] struct {
+	ID     string
+	Name   string
+	Steps  []Step[T]
+	logger *slog.Logger
+	tracer trace.Tracer
 }
 
-func (s Saga) logger() *slog.Logger {
-	if s.Logger != nil {
-		return s.Logger
+// DefaultTracerName is the instrumentation scope for sagas that do
+// not customize it via WithTracerName.
+const DefaultTracerName = "pkg/saga"
+
+// Option configures a Saga. The zero option set keeps the defaults.
+type Option[T any] func(*Saga[T])
+
+// WithLogger sets the saga logger. Nil keeps slog.Default().
+func WithLogger[T any](l *slog.Logger) Option[T] {
+	return func(s *Saga[T]) {
+		if l != nil {
+			s.logger = l
+		}
 	}
-	return slog.Default()
 }
 
-func (s Saga) tracer() trace.Tracer {
-	name := s.TracerName
-	if name == "" {
-		name = "pkg/saga"
+// WithTracerName resolves otel.Tracer(name) and sets it. Empty keeps
+// the DefaultTracerName tracer.
+func WithTracerName[T any](name string) Option[T] {
+	return func(s *Saga[T]) {
+		if name != "" {
+			s.tracer = otel.Tracer(name)
+		}
 	}
-	return otel.Tracer(name)
 }
 
-func (s Saga) compensateTimeout() time.Duration {
-	if s.CompensateTimeout > 0 {
-		return s.CompensateTimeout
+// New builds a Saga with a uuid ID and guaranteed log/tracing:
+// logger defaults to slog.Default(), tracer to
+// otel.Tracer(DefaultTracerName). Opts override either; nil/empty
+// options keep the defaults, so both fields are non-nil on return.
+func New[T any](name string, steps []Step[T], opts ...Option[T]) Saga[T] {
+	s := Saga[T]{ID: uuid.NewString(), Name: name, Steps: steps}
+	for _, opt := range opts {
+		opt(&s)
 	}
-	return DefaultCompensateTimeout
+
+	if s.logger == nil {
+		s.logger = slog.Default()
+	}
+
+	if s.tracer == nil {
+		s.tracer = otel.Tracer(DefaultTracerName)
+	}
+
+	s.logger = s.logger.With(slog.String("saga_id", s.ID), slog.String("saga_name", s.Name))
+
+	return s
 }
 
 // Run executes steps in order, stopping at the first failure (or cancelled
-// ctx). On ordinary failure Run returns the failure immediately and the
-// completed steps are compensated in reverse in the background. Returns nil
-// on success.
-func (s Saga) Run(ctx context.Context) error {
-	id := s.ID
-	if id == "" {
-		id = uuid.NewString()
-	}
-	log := s.logger().With(slog.String("saga_id", id), slog.String("saga_name", s.Name))
-	tr := s.tracer()
-	ctx, span := tr.Start(ctx, "saga."+s.Name,
-		trace.WithAttributes(attribute.String("saga.id", id), attribute.String("saga.name", s.Name)))
+// ctx). On ordinary failure Run returns the failure immediately with the
+// unwind plan (completed step names in order) for the caller to queue;
+// Run itself never compensates. Returns nil on success.
+func (s Saga[T]) Run(ctx context.Context, item *T) error {
+	ctx, span := s.tracer.Start(ctx, "saga."+s.Name,
+		trace.WithAttributes(attribute.String("saga.id", s.ID), attribute.String("saga.name", s.Name)))
 	defer span.End()
 
 	var completed []string
-	// ponytail: O(n^2) completed-name lookup replaced by index loop; steps are few.
 	for _, st := range s.Steps {
-		// timeout: if the caller ctx is cancelled, we stop and unwind in the
-		// background. The failure returns immediately.
+		// timeout: if the caller ctx is cancelled, we stop and return the
+		// plan for the steps completed so far. The failure returns immediately.
 		if ctx.Err() != nil {
 			span.RecordError(ctx.Err())
 			span.SetStatus(codes.Error, "context cancelled")
-			return s.unwindAsync(ctx, log, tr, id, completed, st.Name, ctx.Err())
+			return &RunError{
+				SagaID: s.ID, SagaName: s.Name,
+				FailedStep: st.Name(), StepErr: ctx.Err(),
+				Completed: append([]string(nil), completed...),
+			}
 		}
 
-		doErr := s.do(ctx, tr, st)
-		if s.OnStep != nil {
-			s.OnStep(ctx, id, st.Name, doErr)
-		}
-		if doErr != nil {
+		if doErr := s.executeStepDo(ctx, st, item); doErr != nil {
 			var indoubt *InDoubtError
 			if errors.As(doErr, &indoubt) {
-				log.WarnContext(ctx, "saga step in-doubt, skipping unwind",
-					slog.String("step", st.Name), slog.String("error", doErr.Error()))
+				s.logger.WarnContext(ctx, "saga step in-doubt, skipping unwind",
+					slog.String("step", st.Name()), slog.String("error", doErr.Error()))
 				span.RecordError(doErr)
 				span.SetStatus(codes.Error, "step in-doubt")
 				return &RunError{
-					SagaID: id, SagaName: s.Name,
-					FailedStep: st.Name, StepErr: doErr,
+					SagaID: s.ID, SagaName: s.Name,
+					FailedStep: st.Name(), StepErr: doErr,
 					Completed: append([]string(nil), completed...),
 					InDoubt:   true,
 				}
 			}
-			log.ErrorContext(ctx, "saga step failed",
-				slog.String("step", st.Name), slog.String("error", doErr.Error()))
+
+			s.logger.ErrorContext(ctx, "saga step failed",
+				slog.String("step", st.Name()), slog.String("error", doErr.Error()))
 			span.RecordError(doErr)
 			span.SetStatus(codes.Error, "step failed")
-			return s.unwindAsync(ctx, log, tr, id, completed, st.Name, doErr)
+
+			return &RunError{
+				SagaID: s.ID, SagaName: s.Name,
+				FailedStep: st.Name(), StepErr: doErr,
+				Completed: append([]string(nil), completed...),
+			}
 		}
 
-		completed = append(completed, st.Name)
+		completed = append(completed, st.Name())
 	}
+
 	return nil
 }
 
-func (s Saga) do(ctx context.Context, tr trace.Tracer, st Step) error {
-	ctx, span := tr.Start(ctx, "saga.step."+st.Name,
-		trace.WithAttributes(attribute.String("step", st.Name)))
+func (s Saga[T]) executeStepDo(ctx context.Context, st Step[T], item *T) error {
+	ctx, span := s.tracer.Start(ctx, "saga.step."+st.Name(),
+		trace.WithAttributes(attribute.String("step", st.Name())))
 	defer span.End()
-	if st.Do == nil {
-		return nil
-	}
-	if err := st.Do(ctx); err != nil {
+
+	if err := st.Do(ctx, item); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "step failed")
 		return err
 	}
-	return nil
-}
 
-// unwindAsync builds the failure result and compensates completed steps in
-// reverse in the background, then returns immediately. The unwind runs on a
-// context detached from the caller (so a disconnected client never aborts
-// it) bounded by the compensate timeout, with spans re-rooted under a fresh
-// trace since the request span may close on return. Compensation errors are
-// logged with saga identity; unwinding continues past them.
-func (s Saga) unwindAsync(ctx context.Context, log *slog.Logger, tr trace.Tracer, id string, completed []string, failed string, stepErr error) *RunError {
-	out := &RunError{
-		SagaID: id, SagaName: s.Name,
-		FailedStep: failed, StepErr: stepErr,
-		Completed: append([]string(nil), completed...),
-	}
-	byName := make(map[string]Step, len(s.Steps))
-	for _, st := range s.Steps {
-		byName[st.Name] = st
-	}
-	go func() {
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.compensateTimeout())
-		defer cancel()
-		uctx, uspan := tr.Start(cctx, "saga."+s.Name+".unwind",
-			trace.WithAttributes(attribute.String("saga.id", id), attribute.String("saga.name", s.Name)))
-		defer uspan.End()
-		for i := len(completed) - 1; i >= 0; i-- {
-			name := completed[i]
-			st := byName[name]
-			if st.Compensate == nil {
-				continue
-			}
-			cctx, cspan := tr.Start(uctx, "saga.compensate."+name,
-				trace.WithAttributes(attribute.String("step", name)))
-			err := st.Compensate(cctx)
-			if err != nil {
-				cspan.RecordError(err)
-				cspan.SetStatus(codes.Error, "compensate failed")
-				log.WarnContext(cctx, "saga compensate failed",
-					slog.String("step", name), slog.String("error", err.Error()))
-			}
-			cspan.End()
-		}
-	}()
-	return out
+	return nil
 }

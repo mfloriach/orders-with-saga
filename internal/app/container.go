@@ -26,7 +26,7 @@ type Container struct {
 	AppDB    *sql.DB
 	LedgerDB *sql.DB
 	Redis    *redis.Client
-	Broker   *Broker
+	Broker   *config.Broker
 	Logger   *slog.Logger
 	Tracer   *sdktrace.TracerProvider
 	Config   config.Config
@@ -63,30 +63,30 @@ func (c *Container) Shutdown(ctx context.Context) error {
 }
 
 func Build(cfg config.Config) (*Container, error) {
-	network, err := cardNetwork(cfg)
+	network, err := NewCardNetwork(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	appDB, err := OpenPostgres(cfg.AppDSN, "app", cfg)
+	appDB, err := config.OpenPostgres(cfg.AppDSN, "app", cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	ledgerDB, err := OpenPostgres(cfg.LedgerDSN, "ledger", cfg)
+	ledgerDB, err := config.OpenPostgres(cfg.LedgerDSN, "ledger", cfg)
 	if err != nil {
 		appDB.Close()
 		return nil, err
 	}
 
-	rdb, err := OpenRedis(cfg)
+	rdb, err := config.OpenRedis(cfg)
 	if err != nil {
 		appDB.Close()
 		ledgerDB.Close()
 		return nil, err
 	}
 
-	broker, err := OpenBroker(cfg)
+	broker, err := config.OpenBroker(cfg)
 	if err != nil {
 		appDB.Close()
 		ledgerDB.Close()
@@ -103,17 +103,16 @@ func Build(cfg config.Config) (*Container, error) {
 	mH := merchant.NewHandler(mSvc)
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
-	pLedger := repositories.NewAuditRepository(ledgerDB)
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network, NewWebhookPublisher(broker), NewEmailPublisher(broker))
+	pSvc := payment.NewService(pApp, mRepo, network, NewWebhookPublisher(broker))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Broker: broker, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
 }
 
-// cardNetwork builds the card-network client when configured.
+// NewCardNetwork builds the card-network client when configured.
 // Empty base URL keeps the nil network (Create fails closed); a base
 // URL without key is a boot error.
-func cardNetwork(cfg config.Config) (domain.CardNetwork, error) {
+func NewCardNetwork(cfg config.Config) (domain.CardNetwork, error) {
 	return repositories.NewMasterCardRepository(
 		apiclient.New(nil),
 		repositories.MasterCardConfig{

@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/saga"
 )
@@ -12,46 +13,46 @@ type Authorize struct {
 	CardNetwork domain.CardNetwork
 }
 
-func (s Authorize) Run(p *domain.Payment) saga.Step {
-	return saga.Step{
-		Name: "authorize",
-		Do: func(ctx context.Context) error {
-			if err := s.CardNetwork.Authenticate(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
-				return fmt.Errorf("payment: card network did not accept %s: %w", p.ID, err)
-			}
+func (s Authorize) Name() string { return "authorize" }
 
-			if err := s.Payments.MarkAuthorized(ctx, p); err != nil {
-				return fmt.Errorf("payment: failed to mark authorized: %w", err)
-			}
+func (s Authorize) Do(ctx context.Context, p *domain.Payment) error {
+	if err := s.CardNetwork.Authenticate(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
+		return fmt.Errorf("payment: card network did not accept %s: %w", p.ID, err)
+	}
 
-			return nil
-		},
-		Compensate: func(ctx context.Context) error {
-			_, status, err := s.CardNetwork.GetPayment(ctx, p.ID)
-			if err != nil {
-				return &saga.InDoubtError{Step: "authorize", Err: err}
-			}
+	if err := s.Payments.MarkAuthorized(ctx, p); err != nil {
+		return fmt.Errorf("payment: failed to mark authorized: %w", err)
+	}
 
-			switch domain.NetworkStatus(status) {
-			case domain.NetworkAccepted:
-				if err := s.Payments.MarkAuthorized(ctx, p); err != nil {
-					return fmt.Errorf("payment: failed to mark authorized: %w", err)
-				}
+	return nil
+}
 
-				if err := s.CardNetwork.Capture(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
-					return &saga.InDoubtError{Step: "capture", Err: err}
-				}
+func (s Authorize) Compensate(ctx context.Context, p *domain.Payment) error {
+	_, status, err := s.CardNetwork.GetPayment(ctx, p.ID)
+	if err != nil {
+		return &saga.InDoubtError{Step: "authorize", Err: err}
+	}
 
-				if err := s.Payments.MarkCaptured(ctx, p); err != nil {
-					return fmt.Errorf("payment: failed to mark captured: %w", err)
-				}
+	switch domain.NetworkStatus(status) {
+	case domain.NetworkAccepted:
+		// if err := markApplied(ctx, s.Payments, p, domain.StatusAuthorized, s.Payments.MarkAuthorized); err != nil {
+		// 	return fmt.Errorf("payment: failed to mark authorized: %w", err)
+		// }
 
-				return nil
-			case domain.NetworkRejected:
-				return fmt.Errorf("payment: card network did not accept %s: %w", p.ID, err)
-			default:
-				return &saga.InDoubtError{Step: "authorize", Err: err}
-			}
-		},
+		if err := s.CardNetwork.Capture(ctx, p.ID, p.Amount, p.IdempotencyKey); err != nil {
+			return &saga.InDoubtError{Step: "capture", Err: err}
+		}
+
+		// return markApplied(ctx, s.Payments, p, domain.StatusCaptured, s.Payments.MarkCaptured)
+		return nil
+	case domain.NetworkRejected:
+		// Terminal refusal: nothing to reconcile. Log it and let
+		// the unwind converge — downstream steps (mark failed)
+		// still run this attempt.
+		slog.InfoContext(ctx, "payment: authorize nothing to reconcile, remote refused",
+			slog.String("payment_id", p.ID))
+		return nil
+	default:
+		return &saga.InDoubtError{Step: "authorize", Err: err}
 	}
 }

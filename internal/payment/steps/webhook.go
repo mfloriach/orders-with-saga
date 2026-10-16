@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"paymentgateway/internal/payment/models"
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/webhooks"
 	"paymentgateway/pkg/saga"
 )
@@ -13,7 +13,7 @@ type Webhook struct {
 	Publisher webhooks.Publisher
 }
 
-func (s Webhook) Run(p *models.Payment) saga.Step {
+func (s Webhook) Run(p *domain.Payment) saga.Step {
 	return saga.Step{
 		Name: "send-webhook",
 		Do: func(ctx context.Context) error {

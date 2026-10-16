@@ -1,10 +1,10 @@
 package steps
 
 import (
-	"paymentgateway/internal/payment/models"
+	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/saga"
 )
 
 type Step interface {
-	Run(p *models.Payment) saga.Step
+	Run(p *domain.Payment) saga.Step
 }

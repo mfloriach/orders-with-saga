@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/merchant"
-	"paymentgateway/internal/payment/models"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/idempotency"
 	"paymentgateway/pkg/validate"
@@ -20,7 +20,7 @@ type Handler struct{ svc creator }
 // The raw Idempotency-Key header is passed through; key resolution lives
 // in the service.
 type creator interface {
-	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error)
+	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error)
 }
 
 func NewHandler(svc creator) *Handler { return &Handler{svc} }
@@ -30,6 +30,18 @@ type createBody struct {
 	Amount     int64  `json:"amount" validate:"gt=0"`
 }
 
+// CreatePayment godoc
+// @Summary      Create a payment
+// @Tags         payments
+// @Accept       json
+// @Produce      json
+// @Param        Idempotency-Key header string false "Idempotency key"
+// @Param        body body createBody true "Payment"
+// @Success      201  {object}  domain.Payment
+// @Failure      400  {object}  apperr.AppError
+// @Failure      404  {object}  apperr.AppError
+// @Failure      409  {object}  apperr.AppError
+// @Router       /payments [post]
 func (h *Handler) Create(c *fiber.Ctx) error {
 	var b createBody
 	if err := c.BodyParser(&b); err != nil {
@@ -42,7 +54,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	idemKey := c.Get("Idempotency-Key", idempotency.GenerateKey(c.Request().RequestURI()))
 
 	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, idemKey)
-	var ce *models.ConflictError
+	var ce *domain.ConflictError
 	switch {
 	case errors.Is(err, merchant.ErrNotFound):
 		return apperr.MerchantNotFound()

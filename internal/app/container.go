@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"paymentgateway/internal/config"
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
-	"paymentgateway/internal/payment/models"
 	"paymentgateway/internal/payment/repositories"
 	"paymentgateway/pkg/apiclient"
 	"paymentgateway/pkg/logging"
@@ -104,7 +104,7 @@ func Build(cfg config.Config) (*Container, error) {
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
 	pLedger := repositories.NewAuditRepository(ledgerDB)
-	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network, NewWebhookPublisher(broker))
+	pSvc := payment.NewService(pApp, pLedger, mRepo, rdb, network, NewWebhookPublisher(broker), NewEmailPublisher(broker))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Broker: broker, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil
@@ -113,7 +113,7 @@ func Build(cfg config.Config) (*Container, error) {
 // cardNetwork builds the card-network client when configured.
 // Empty base URL keeps the nil network (Create fails closed); a base
 // URL without key is a boot error.
-func cardNetwork(cfg config.Config) (models.CardNetwork, error) {
+func cardNetwork(cfg config.Config) (domain.CardNetwork, error) {
 	return repositories.NewMasterCardRepository(
 		apiclient.New(nil),
 		repositories.MasterCardConfig{

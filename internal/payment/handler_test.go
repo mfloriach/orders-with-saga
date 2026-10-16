@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/merchant"
-	"paymentgateway/internal/payment/models"
 	"paymentgateway/pkg/apperr"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 type stubService struct {
-	create func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error)
+	create func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error)
 }
 
-func (s stubService) Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
+func (s stubService) Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
 	return s.create(ctx, merchantID, amount, idemHeader)
 }
 
@@ -46,9 +46,9 @@ func doPost(t *testing.T, h *Handler, body, idemHeader string) (int, map[string]
 	return resp.StatusCode, decoded, resp.Header.Get("Idempotency-Key")
 }
 
-func okStub() func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
-	return func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
-		return &models.Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: "pending"}, nil
+func okStub() func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
+	return func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
+		return &domain.Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: "pending"}, nil
 	}
 }
 
@@ -56,7 +56,7 @@ func TestCreateErrors(t *testing.T) {
 	cases := []struct {
 		name       string
 		body       string
-		stub       func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error)
+		stub       func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error)
 		wantStatus int
 		wantCode   string
 		wantExtra  string
@@ -66,7 +66,7 @@ func TestCreateErrors(t *testing.T) {
 		{
 			"merchant not found",
 			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
-			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
 				return nil, merchant.ErrNotFound
 			},
 			404, "merchant_not_found", "",
@@ -74,15 +74,15 @@ func TestCreateErrors(t *testing.T) {
 		{
 			"idempotency conflict",
 			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
-			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
-				return nil, &models.ConflictError{Existing: &models.Payment{ID: "pid-9", IdempotencyKey: "k-1"}}
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
+				return nil, &domain.ConflictError{Existing: &domain.Payment{ID: "pid-9", IdempotencyKey: "k-1"}}
 			},
 			409, "idempotency_conflict", "pid-9",
 		},
 		{
 			"internal error",
 			`{"merchant_id":"` + testMerchantID + `","amount":100}`,
-			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
+			func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
 				return nil, errors.New("boom")
 			},
 			500, "internal_error", "",
@@ -120,20 +120,20 @@ func TestCreateSuccess(t *testing.T) {
 // authorized once the network confirms funds held.
 func TestCreateEchoesStoredStatus(t *testing.T) {
 	status, body, _ := doPost(t,
-		NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
-			return &models.Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: models.StatusAuthorized}, nil
+		NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
+			return &domain.Payment{ID: "p-1", MerchantID: merchantID, Amount: amount, IdempotencyKey: idemHeader, Status: domain.StatusAuthorized}, nil
 		}}),
 		`{"merchant_id":"`+testMerchantID+`","amount":100}`, "k-1")
-	if status != 201 || body["status"] != string(models.StatusAuthorized) {
+	if status != 201 || body["status"] != string(domain.StatusAuthorized) {
 		t.Fatalf("got %d %v", status, body)
 	}
 }
 
 func TestHeaderPassedToService(t *testing.T) {
 	var gotHeader string
-	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
+	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
 		gotHeader = idemHeader
-		return &models.Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
+		return &domain.Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
 	}})
 	status, _, echo := doPost(t, h, `{"merchant_id":"`+testMerchantID+`","amount":100}`, "client-key")
 	if status != 201 || gotHeader != "client-key" {
@@ -148,11 +148,11 @@ func TestMissingHeaderEchoesEffectiveKey(t *testing.T) {
 	// ponytail follow-up: derivation hashes the raw RequestURI, so every
 	// header-less POST /payments shares one key per merchant — collides on
 	// repeat purchases. Tracked separately; this test pins current behavior.
-	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*models.Payment, error) {
+	h := NewHandler(stubService{create: func(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error) {
 		if !strings.HasPrefix(idemHeader, "drv:") {
 			t.Fatalf("expected derived key, got %q", idemHeader)
 		}
-		return &models.Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
+		return &domain.Payment{ID: "p-1", IdempotencyKey: idemHeader}, nil
 	}})
 	status, _, echo := doPost(t, h, `{"merchant_id":"`+testMerchantID+`","amount":100}`, "")
 	if status != 201 {

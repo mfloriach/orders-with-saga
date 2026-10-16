@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -16,6 +18,55 @@ import (
 func ok() func(context.Context) error { return func(context.Context) error { return nil } }
 func fail(err error) func(context.Context) error {
 	return func(context.Context) error { return err }
+}
+
+// rec is a mutex-guarded append recorder for background unwind assertions.
+type rec struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (r *rec) add(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.names = append(r.names, name)
+}
+
+func (r *rec) get() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.names...)
+}
+
+// syncBuf is a goroutine-safe log sink for background unwind assertions.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// waitFor polls cond until true or the timeout, failing the test.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 // verifies a clean run returns nil and skips compensation.
@@ -33,16 +84,18 @@ func TestSuccessRunsNoCompensation(t *testing.T) {
 	}
 }
 
-// verifies a mid-chain failure skips later steps and compensates in reverse with resume data.
+// verifies a mid-chain failure skips later steps and compensates in reverse
+// in the background with resume data returned immediately.
 func TestFailureStopsForwardAndUnwindsReverse(t *testing.T) {
-	var did, undid []string
+	var did []string
+	undid := &rec{}
 	boom := errors.New("boom")
 	do := func(name string, err error) func(context.Context) error {
 		return func(context.Context) error { did = append(did, name); return err }
 	}
 	s := Saga{ID: "s-1", Name: "t", Steps: []Step{
-		{Name: "a", Do: do("a", nil), Compensate: func(context.Context) error { undid = append(undid, "a"); return nil }},
-		{Name: "b", Do: do("b", nil), Compensate: func(context.Context) error { undid = append(undid, "b"); return nil }},
+		{Name: "a", Do: do("a", nil), Compensate: func(context.Context) error { undid.add("a"); return nil }},
+		{Name: "b", Do: do("b", nil), Compensate: func(context.Context) error { undid.add("b"); return nil }},
 		{Name: "c", Do: do("c", boom)},
 		{Name: "d", Do: do("d", nil)},
 	}}
@@ -57,54 +110,60 @@ func TestFailureStopsForwardAndUnwindsReverse(t *testing.T) {
 	if len(did) != 3 || did[0] != "a" || did[1] != "b" || did[2] != "c" {
 		t.Fatalf("step d executed or order wrong: %v", did)
 	}
-	if len(re.CompensateErrs) != 0 {
-		t.Fatalf("compensations failed: %+v", re.CompensateErrs)
-	}
 	if re.SagaID != "s-1" || len(re.Completed) != 2 || re.Completed[0] != "a" {
 		t.Fatalf("bad resume data: %+v", re)
 	}
-	if len(undid) != 2 || undid[0] != "b" || undid[1] != "a" {
-		t.Fatalf("bad unwind order: %v", undid)
+	waitFor(t, "background unwind", func() bool { return len(undid.get()) == 2 })
+	if got := undid.get(); len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Fatalf("bad unwind order: %v", got)
 	}
 }
 
 // verifies nil compensations are skipped and the failed step itself is never compensated.
 func TestNilCompensateSkippedAndFailedStepNotCompensated(t *testing.T) {
-	var ran []string
+	ran := &rec{}
 	s := Saga{Name: "t", Steps: []Step{
 		{Name: "a", Do: ok()}, // nil compensate
 		{Name: "b", Do: fail(errors.New("x")), Compensate: func(context.Context) error {
-			ran = append(ran, "b")
+			ran.add("b")
 			return nil
 		}},
 	}}
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
-	if len(ran) != 0 {
-		t.Fatalf("failed step compensated: %v", ran)
+	// Give the background unwind a chance to wrongly run, then assert silence.
+	time.Sleep(100 * time.Millisecond)
+	if got := ran.get(); len(got) != 0 {
+		t.Fatalf("failed step compensated: %v", got)
 	}
 }
 
-// verifies a failing compensation is collected without aborting the remaining unwind.
-func TestCompensateErrorsAggregatedAndUnwindContinues(t *testing.T) {
-	var ran []string
+// verifies a failing compensation is logged without aborting the remaining unwind.
+func TestCompensateErrorsLoggedAndUnwindContinues(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	ran := &rec{}
 	ce := errors.New("undo-bad")
 	s := Saga{Name: "t", Steps: []Step{
-		{Name: "a", Do: ok(), Compensate: func(context.Context) error { ran = append(ran, "a"); return nil }},
-		{Name: "b", Do: ok(), Compensate: func(context.Context) error { ran = append(ran, "b"); return ce }},
+		{Name: "a", Do: ok(), Compensate: func(context.Context) error { ran.add("a"); return nil }},
+		{Name: "b", Do: ok(), Compensate: func(context.Context) error { ran.add("b"); return ce }},
 		{Name: "c", Do: fail(errors.New("main"))},
-	}}
+	}, Logger: log}
 	err := s.Run(context.Background())
 	var re *RunError
 	if !errors.As(err, &re) {
 		t.Fatalf("expected *RunError, got %T", err)
 	}
-	if len(re.CompensateErrs) != 1 || re.CompensateErrs[0].Step != "b" || !errors.Is(re.CompensateErrs[0].Err, ce) {
-		t.Fatalf("bad compensate errors: %+v", re.CompensateErrs)
+	waitFor(t, "background unwind", func() bool { return len(ran.get()) == 2 })
+	if got := ran.get(); len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Fatalf("unwind did not continue: %v", got)
 	}
-	if len(ran) != 2 || ran[0] != "b" || ran[1] != "a" {
-		t.Fatalf("unwind did not continue: %v", ran)
+	out := buf.String()
+	for _, want := range []string{`"level":"WARN"`, `"step":"b"`, "undo-bad"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in logs: %s", want, out)
+		}
 	}
 }
 
@@ -144,8 +203,8 @@ func TestCancelledCtxStillUnwindsCompleted(t *testing.T) {
 	}
 	select {
 	case <-done:
-	default:
-		t.Fatal("completed step was not compensated")
+	case <-time.After(5 * time.Second):
+		t.Fatal("completed step was not compensated in background")
 	}
 }
 
@@ -161,7 +220,8 @@ func TestDefaultSagaIDGenerated(t *testing.T) {
 	}
 }
 
-// verifies per-step spans exist and failure logs carry saga identity.
+// verifies per-step spans exist, unwind is re-rooted in the background,
+// and failure logs carry saga identity.
 func TestObservabilitySpansAndLogs(t *testing.T) {
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
@@ -169,7 +229,7 @@ func TestObservabilitySpansAndLogs(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	defer otel.SetTracerProvider(old)
 
-	var buf bytes.Buffer
+	var buf syncBuf
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 	boom := errors.New("kaboom")
 	s := Saga{Name: "pay", Steps: []Step{
@@ -179,11 +239,19 @@ func TestObservabilitySpansAndLogs(t *testing.T) {
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
+	waitFor(t, "background unwind span", func() bool {
+		for _, sp := range sr.Ended() {
+			if sp.Name() == "saga.compensate.a" {
+				return true
+			}
+		}
+		return false
+	})
 	names := map[string]bool{}
 	for _, sp := range sr.Ended() {
 		names[sp.Name()] = true
 	}
-	for _, want := range []string{"saga.pay", "saga.step.a", "saga.step.b", "saga.compensate.a"} {
+	for _, want := range []string{"saga.pay", "saga.step.a", "saga.step.b", "saga.pay.unwind", "saga.compensate.a"} {
 		if !names[want] {
 			t.Fatalf("missing span %q in %v", want, names)
 		}
@@ -196,9 +264,10 @@ func TestObservabilitySpansAndLogs(t *testing.T) {
 	}
 }
 
-// verifies step failure logs ERROR and compensate failure logs WARN with saga identity.
+// verifies step failure logs ERROR and background compensate failure logs
+// WARN with saga identity.
 func TestFailureLogsCarrySagaIdentity(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuf
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 	boom := errors.New("boom")
 	undoBad := errors.New("undo-bad")
@@ -209,6 +278,9 @@ func TestFailureLogsCarrySagaIdentity(t *testing.T) {
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("expected error")
 	}
+	waitFor(t, "background compensate log", func() bool {
+		return strings.Contains(buf.String(), `"level":"WARN"`)
+	})
 	out := buf.String()
 	for _, want := range []string{
 		`"level":"ERROR"`, `"saga_id":"s-log"`, `"saga_name":"pay"`, `"step":"b"`, "boom",
@@ -259,7 +331,7 @@ func TestInDoubtSkipsUnwind(t *testing.T) {
 	if !re.InDoubt || re.FailedStep != "c" || !errors.Is(re.StepErr, cause) {
 		t.Fatalf("bad in-doubt identity: %+v", re)
 	}
-	if len(re.Completed) != 2 || len(re.CompensateErrs) != 0 {
+	if len(re.Completed) != 2 {
 		t.Fatalf("bad resume data: %+v", re)
 	}
 	if compensated {
@@ -269,10 +341,10 @@ func TestInDoubtSkipsUnwind(t *testing.T) {
 
 // verifies an ordinary error still unwinds in reverse when in-doubt exists elsewhere.
 func TestInDoubtOrdinaryErrorStillUnwinds(t *testing.T) {
-	var undid []string
+	undid := &rec{}
 	boom := errors.New("boom")
 	s := Saga{Name: "t", Steps: []Step{
-		{Name: "a", Do: ok(), Compensate: func(context.Context) error { undid = append(undid, "a"); return nil }},
+		{Name: "a", Do: ok(), Compensate: func(context.Context) error { undid.add("a"); return nil }},
 		{Name: "b", Do: fail(boom)},
 	}}
 	err := s.Run(context.Background())
@@ -283,7 +355,8 @@ func TestInDoubtOrdinaryErrorStillUnwinds(t *testing.T) {
 	if re.InDoubt {
 		t.Fatalf("ordinary error flagged in-doubt: %+v", re)
 	}
-	if len(undid) != 1 || undid[0] != "a" {
-		t.Fatalf("ordinary error did not unwind: %v", undid)
+	waitFor(t, "background unwind", func() bool { return len(undid.get()) == 1 })
+	if got := undid.get(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("ordinary error did not unwind: %v", got)
 	}
 }

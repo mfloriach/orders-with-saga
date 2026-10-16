@@ -18,6 +18,9 @@ const (
 	DeliverQueue    = webhooks.DeliverQueue
 	DLQueue         = webhooks.DLQueue
 	WebhookRoute    = webhooks.RouteKey
+	EmailRoute      = webhooks.EmailRoute
+	EmailQueue      = webhooks.EmailQueue
+	EmailDLQueue    = webhooks.EmailDLQueue
 )
 
 // Broker is an AMQP connection with the webhook topology declared.
@@ -68,6 +71,20 @@ func (b *Broker) declare() error {
 	}
 	if err := ch.QueueBind(DLQueue, "webhook.*", WebhookDLX, false, nil); err != nil {
 		return fmt.Errorf("bind queue %s: %w", DLQueue, err)
+	}
+	if _, err := ch.QueueDeclare(EmailQueue, true, false, false, false, amqp.Table{
+		"x-dead-letter-exchange": WebhookDLX,
+	}); err != nil {
+		return fmt.Errorf("declare queue %s: %w", EmailQueue, err)
+	}
+	if _, err := ch.QueueDeclare(EmailDLQueue, true, false, false, false, nil); err != nil {
+		return fmt.Errorf("declare queue %s: %w", EmailDLQueue, err)
+	}
+	if err := ch.QueueBind(EmailQueue, "email.*", WebhookExchange, false, nil); err != nil {
+		return fmt.Errorf("bind queue %s: %w", EmailQueue, err)
+	}
+	if err := ch.QueueBind(EmailDLQueue, "email.*", WebhookDLX, false, nil); err != nil {
+		return fmt.Errorf("bind queue %s: %w", EmailDLQueue, err)
 	}
 	return nil
 }

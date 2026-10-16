@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"paymentgateway/internal/payment/models"
+	"paymentgateway/internal/domain"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -32,14 +32,14 @@ func openTestDB(t *testing.T) (*sql.DB, context.Context) {
 	return db, ctx
 }
 
-func seedPending(t *testing.T, ctx context.Context, db *sql.DB, key string) *models.Payment {
+func seedPending(t *testing.T, ctx context.Context, db *sql.DB, key string) *domain.Payment {
 	t.Helper()
 	mid := "11111111-1111-1111-1111-111111111111"
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO merchants (id, name, email) VALUES ($1,'t','t@t.t') ON CONFLICT DO NOTHING`, mid); err != nil {
 		t.Fatal(err)
 	}
-	p := &models.Payment{MerchantID: mid, Amount: 100, IdempotencyKey: key}
+	p := &domain.Payment{MerchantID: mid, Amount: 100, IdempotencyKey: key}
 	if err := NewPaymentDatabaseRepository(db).InsertPending(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestMarkAuthorizedRoundTrip(t *testing.T) {
 	if err := r.MarkAuthorized(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if p.Status != models.StatusAuthorized {
+	if p.Status != domain.StatusAuthorized {
 		t.Fatalf("p.Status=%q, want authorized", p.Status)
 	}
 	var status string
@@ -64,7 +64,7 @@ func TestMarkAuthorizedRoundTrip(t *testing.T) {
 		`SELECT status FROM payments WHERE id=$1`, p.ID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status != string(models.StatusAuthorized) {
+	if status != string(domain.StatusAuthorized) {
 		t.Fatalf("status=%q, want authorized", status)
 	}
 	if err := r.MarkAuthorized(ctx, p); err == nil {
@@ -83,7 +83,7 @@ func TestEnqueueReconciliationRoundTrip(t *testing.T) {
 		`INSERT INTO merchants (id, name, email) VALUES ($1,'t','t@t.t') ON CONFLICT DO NOTHING`, mid); err != nil {
 		t.Fatal(err)
 	}
-	p := &models.Payment{MerchantID: mid, Amount: 100, IdempotencyKey: "k-outbox-1"}
+	p := &domain.Payment{MerchantID: mid, Amount: 100, IdempotencyKey: "k-outbox-1"}
 	r := NewPaymentDatabaseRepository(db)
 	if err := r.InsertPending(ctx, p); err != nil {
 		t.Fatal(err)

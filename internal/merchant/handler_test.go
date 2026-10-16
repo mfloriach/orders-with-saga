@@ -8,15 +8,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/apperr"
+
+	"github.com/gofiber/fiber/v2"
 )
 
 type stubService struct {
-	register func(ctx context.Context, name, email string, webhook *string) (*Merchant, error)
+	register func(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error)
 }
 
-func (s stubService) Register(ctx context.Context, name, email string, webhook *string) (*Merchant, error) {
+func (s stubService) Register(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error) {
 	return s.register(ctx, name, email, webhook)
 }
 
@@ -24,7 +26,7 @@ func TestCreateErrors(t *testing.T) {
 	cases := []struct {
 		name       string
 		body       string
-		stub       func(ctx context.Context, name, email string, webhook *string) (*Merchant, error)
+		stub       func(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error)
 		wantStatus int
 		wantCode   string
 	}{
@@ -33,7 +35,7 @@ func TestCreateErrors(t *testing.T) {
 		{
 			"email taken",
 			`{"name":"Acme","email":"a@b.com"}`,
-			func(ctx context.Context, name, email string, webhook *string) (*Merchant, error) {
+			func(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error) {
 				return nil, ErrEmailTaken
 			},
 			409, "email_taken",
@@ -41,7 +43,7 @@ func TestCreateErrors(t *testing.T) {
 		{
 			"internal error",
 			`{"name":"Acme","email":"a@b.com"}`,
-			func(ctx context.Context, name, email string, webhook *string) (*Merchant, error) {
+			func(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error) {
 				return nil, errors.New("boom")
 			},
 			500, "internal_error",
@@ -75,8 +77,8 @@ func TestCreateErrors(t *testing.T) {
 
 func TestCreateSuccess(t *testing.T) {
 	hook := "https://acme.example/hook"
-	h := NewHandler(stubService{register: func(ctx context.Context, name, email string, webhook *string) (*Merchant, error) {
-		return &Merchant{ID: "m-1", Name: name, Email: email, WebhookURL: &hook}, nil
+	h := NewHandler(stubService{register: func(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error) {
+		return &domain.Merchant{ID: "m-1", Name: name, Email: email, WebhookURL: &hook}, nil
 	}})
 	app := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
 	app.Post("/merchants", h.Create)

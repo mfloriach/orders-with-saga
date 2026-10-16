@@ -20,18 +20,46 @@ type Event struct {
 // Webhook topology. The worker consumes DeliverQueue; failed deliveries
 // past the attempt cap are parked in DLQueue via the dead-letter exchange.
 // Shared with internal/app, which declares it at boot.
+// Email topology: same exchanges as webhooks, separate queues so webhook
+// and email retries/DLQs stay independent.
 const (
 	Exchange     = "payments.events"
 	DLX          = "payments.dlx"
 	DeliverQueue = "webhook.deliver"
 	DLQueue      = "webhook.dlq"
 	RouteKey     = "webhook.created"
+	EmailRoute   = "email.created"
+	EmailQueue   = "email.send"
+	EmailDLQueue = "email.dlq"
 )
 
 // Publisher delivers events to the broker. Implementations must be safe
 // for concurrent use.
 type Publisher interface {
 	Publish(ctx context.Context, e Event) error
+}
+
+// EmailPublisher delivers email events to the broker. The payload reuses
+// Event; the recipient is resolved at consume time from the merchant.
+type EmailPublisher interface {
+	Publish(ctx context.Context, e Event) error
+}
+
+// FakeEmailPublisher records email events for tests.
+type FakeEmailPublisher struct {
+	mu     sync.Mutex
+	Events []Event
+	Err    error
+}
+
+func (f *FakeEmailPublisher) Publish(_ context.Context, e Event) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return f.Err
+	}
+	f.Events = append(f.Events, e)
+	return nil
 }
 
 // FakePublisher records events for tests. Err, when non-nil, is returned

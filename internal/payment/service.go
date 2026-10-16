@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"paymentgateway/internal/merchant"
-	"paymentgateway/internal/payment/models"
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/payment/steps"
 	"paymentgateway/internal/webhooks"
 	"paymentgateway/pkg/saga"
@@ -18,22 +17,30 @@ import (
 // merchantStore is the merchant lookup seam. *merchant.Repository satisfies
 // it; the interface keeps the service testable without a database.
 type merchantStore interface {
-	FindByID(ctx context.Context, id string) (*merchant.Merchant, error)
+	FindByID(ctx context.Context, id string) (*domain.Merchant, error)
 }
 
 type Service struct {
-	payments    models.PaymentRepository
-	audit       models.AuditStore
+	payments    domain.PaymentRepository
+	audit       domain.AuditStore
 	merchants   merchantStore
 	redis       *redis.Client
-	cardNetwork models.CardNetwork
+	cardNetwork domain.CardNetwork
+	email       steps.Email
 	aa          map[string]steps.Step
 }
 
-func NewService(payments models.PaymentRepository, audit models.AuditStore, merchants merchantStore, rdb *redis.Client, cardNetwork models.CardNetwork, events webhooks.Publisher) *Service {
+func NewService(
+	payments domain.PaymentRepository,
+	audit domain.AuditStore,
+	merchants merchantStore,
+	rdb *redis.Client,
+	cardNetwork domain.CardNetwork,
+	events webhooks.Publisher,
+	emails webhooks.EmailPublisher,
+) *Service {
 	aa := map[string]steps.Step{
 		"pendingPayment": steps.PendingPayment{Payments: payments},
-		"insertAudit":    steps.StepInsertAudit{Audit: audit},
 		"authorize":      steps.Authorize{Payments: payments, CardNetwork: cardNetwork},
 		"capture":        steps.Capture{Payments: payments, CardNetwork: cardNetwork},
 		"webhook":        steps.Webhook{Publisher: events},
@@ -45,14 +52,15 @@ func NewService(payments models.PaymentRepository, audit models.AuditStore, merc
 		merchants:   merchants,
 		redis:       rdb,
 		cardNetwork: cardNetwork,
+		email:       steps.Email{Publisher: emails},
 		aa:          aa,
 	}
 }
 
-func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*models.Payment, error) {
+func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.Payment, error) {
 	existing, err := s.payments.FindByIdem(ctx, merchantID, idemKey)
 	if existing != nil {
-		return nil, &models.ConflictError{Existing: existing}
+		return nil, &domain.ConflictError{Existing: existing}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("payment: failed to check idempotency: %w", err)
@@ -62,15 +70,28 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
 	}
 
-	p := &models.Payment{MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
+	p := &domain.Payment{MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
 	err = saga.Saga{
 		Name: "create-payment",
 		Steps: []saga.Step{
 			s.aa["pendingPayment"].Run(p),
-			s.aa["insertAudit"].Run(p),
 			s.aa["authorize"].Run(p),
 			s.aa["capture"].Run(p),
 			s.aa["webhook"].Run(p),
+		},
+		// Audit is observability, not money: a failing write logs loudly
+		// and never fails the payment.
+		OnStep: func(ctx context.Context, sagaID, step string, err error) {
+			rec := domain.StepRecord{PaymentID: p.ID, SagaID: sagaID, Step: step, Outcome: "success"}
+			if err != nil {
+				rec.Outcome = "failure"
+				rec.Reason = err.Error()
+			}
+
+			if rerr := s.audit.RecordStep(ctx, rec); rerr != nil {
+				slog.ErrorContext(ctx, "audit record failed",
+					slog.String("payment_id", p.ID), slog.String("step", step), slog.String("error", rerr.Error()))
+			}
 		}}.Run(ctx)
 	if err != nil {
 		var re *saga.RunError
@@ -85,11 +106,19 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 				}
 				return nil, re.StepErr
 			}
-			if errors.Is(re.StepErr, models.ErrConflict) {
-				return nil, &models.ConflictError{Existing: existing}
+			if errors.Is(re.StepErr, domain.ErrConflict) {
+				return nil, &domain.ConflictError{Existing: existing}
 			}
 		}
 		return nil, fmt.Errorf("payment: failed to create %s: %w", p.ID, err)
+	}
+
+	// Email goes out after success, outside the saga: a notification failure
+	// must never unwind a captured payment.
+	if err := s.email.Publish(ctx, p); err != nil {
+		slog.ErrorContext(ctx, "email publish failed",
+			slog.String("payment_id", p.ID), slog.String("error", err.Error()))
+		return nil, fmt.Errorf("payment: failed to publish email event %s: %w", p.ID, err)
 	}
 
 	return p, nil

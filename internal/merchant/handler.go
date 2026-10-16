@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/validate"
 
@@ -15,7 +16,7 @@ type Handler struct{ svc registerer }
 
 // registerer is the subset of Service the handler needs (stubbed in tests).
 type registerer interface {
-	Register(ctx context.Context, name, email string, webhook *string) (*Merchant, error)
+	Register(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error)
 }
 
 func NewHandler(svc registerer) *Handler { return &Handler{svc} }
@@ -26,6 +27,16 @@ type createBody struct {
 	WebhookURL *string `json:"webhook_url" validate:"omitempty,http_url,max=2000"`
 }
 
+// CreateMerchant godoc
+// @Summary      Create a merchant
+// @Tags         merchants
+// @Accept       json
+// @Produce      json
+// @Param        body body createBody true "Merchant"
+// @Success      201  {object}  domain.Merchant
+// @Failure      400  {object}  apperr.AppError
+// @Failure      409  {object}  apperr.AppError
+// @Router       /merchants [post]
 func (h *Handler) Create(c *fiber.Ctx) error {
 	var b createBody
 	if err := c.BodyParser(&b); err != nil {

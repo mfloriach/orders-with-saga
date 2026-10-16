@@ -3,48 +3,48 @@ package payment
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
-	"paymentgateway/internal/merchant"
-	"paymentgateway/internal/payment/models"
+	"paymentgateway/internal/domain"
 	"paymentgateway/internal/webhooks"
 )
 
 type fakePayments struct {
-	existing   *models.Payment
-	enqueued   []string
-	authorize  func(p *models.Payment) error
-	capture    func(p *models.Payment) error
+	existing  *domain.Payment
+	enqueued  []string
+	authorize func(p *domain.Payment) error
+	capture   func(p *domain.Payment) error
 }
 
-func (f *fakePayments) InsertPending(_ context.Context, p *models.Payment) error {
+func (f *fakePayments) InsertPending(_ context.Context, p *domain.Payment) error {
 	p.ID = "pay-test"
-	p.Status = models.StatusPending
+	p.Status = domain.StatusPending
 	return nil
 }
 
-func (f *fakePayments) FindByIdem(_ context.Context, _, _ string) (*models.Payment, error) {
+func (f *fakePayments) FindByIdem(_ context.Context, _, _ string) (*domain.Payment, error) {
 	return f.existing, nil
 }
 
-func (f *fakePayments) MarkFailed(_ context.Context, p *models.Payment) error {
-	p.Status = models.StatusFailed
+func (f *fakePayments) MarkFailed(_ context.Context, p *domain.Payment) error {
+	p.Status = domain.StatusFailed
 	return nil
 }
 
-func (f *fakePayments) MarkAuthorized(_ context.Context, p *models.Payment) error {
+func (f *fakePayments) MarkAuthorized(_ context.Context, p *domain.Payment) error {
 	if f.authorize != nil {
 		return f.authorize(p)
 	}
-	p.Status = models.StatusAuthorized
+	p.Status = domain.StatusAuthorized
 	return nil
 }
 
-func (f *fakePayments) MarkCaptured(_ context.Context, p *models.Payment) error {
+func (f *fakePayments) MarkCaptured(_ context.Context, p *domain.Payment) error {
 	if f.capture != nil {
 		return f.capture(p)
 	}
-	p.Status = models.StatusCaptured
+	p.Status = domain.StatusCaptured
 	return nil
 }
 
@@ -53,18 +53,22 @@ func (f *fakePayments) EnqueueReconciliation(_ context.Context, paymentID, _, _ 
 	return nil
 }
 
-type fakeAudit struct{}
+type fakeAudit struct {
+	steps []domain.StepRecord
+}
 
-func (fakeAudit) Insert(_ context.Context, _ string, _ int64) error { return nil }
-func (fakeAudit) MarkFailed(_ context.Context, _ string) error      { return nil }
+func (f *fakeAudit) RecordStep(_ context.Context, r domain.StepRecord) error {
+	f.steps = append(f.steps, r)
+	return nil
+}
 
 type fakeMerchants struct{ err error }
 
-func (f *fakeMerchants) FindByID(_ context.Context, id string) (*merchant.Merchant, error) {
+func (f *fakeMerchants) FindByID(_ context.Context, id string) (*domain.Merchant, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &merchant.Merchant{ID: id}, nil
+	return &domain.Merchant{ID: id}, nil
 }
 
 type fakeNetwork struct {
@@ -84,8 +88,8 @@ func (f *fakeNetwork) GetPayment(_ context.Context, _ string) (string, string, e
 	return "", "", nil
 }
 
-func testService(p *fakePayments, n *fakeNetwork, pub *webhooks.FakePublisher) *Service {
-	return NewService(p, fakeAudit{}, &fakeMerchants{}, nil, n, pub)
+func testService(p *fakePayments, n *fakeNetwork, pub *webhooks.FakePublisher, epub *webhooks.FakeEmailPublisher, a *fakeAudit) *Service {
+	return NewService(p, a, &fakeMerchants{}, nil, n, pub, epub)
 }
 
 // TestCreatePublishesWebhookEvent verifies one event with the payment's
@@ -93,7 +97,7 @@ func testService(p *fakePayments, n *fakeNetwork, pub *webhooks.FakePublisher) *
 func TestCreatePublishesWebhookEvent(t *testing.T) {
 	payments := &fakePayments{}
 	pub := &webhooks.FakePublisher{}
-	svc := testService(payments, &fakeNetwork{}, pub)
+	svc := testService(payments, &fakeNetwork{}, pub, &webhooks.FakeEmailPublisher{}, &fakeAudit{})
 
 	p, err := svc.Create(context.Background(), "m-1", 500, "k-1")
 	if err != nil {
@@ -109,11 +113,11 @@ func TestCreatePublishesWebhookEvent(t *testing.T) {
 }
 
 // TestCreateFailurePublishesNothing verifies a refused network call
-// compensates and emits no event.
+// returns an error and emits no event.
 func TestCreateFailurePublishesNothing(t *testing.T) {
 	payments := &fakePayments{}
 	pub := &webhooks.FakePublisher{}
-	svc := testService(payments, &fakeNetwork{authErr: errors.New("refused")}, pub)
+	svc := testService(payments, &fakeNetwork{authErr: errors.New("refused")}, pub, &webhooks.FakeEmailPublisher{}, &fakeAudit{})
 
 	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
 		t.Fatal("expected error")
@@ -128,7 +132,7 @@ func TestCreateFailurePublishesNothing(t *testing.T) {
 func TestCreateInDoubtPublishesNothing(t *testing.T) {
 	payments := &fakePayments{}
 	pub := &webhooks.FakePublisher{}
-	svc := testService(payments, &fakeNetwork{captureErr: errors.New("timeout")}, pub)
+	svc := testService(payments, &fakeNetwork{captureErr: errors.New("timeout")}, pub, &webhooks.FakeEmailPublisher{}, &fakeAudit{})
 
 	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
 		t.Fatal("expected in-doubt error")
@@ -144,15 +148,113 @@ func TestCreateInDoubtPublishesNothing(t *testing.T) {
 // TestCreateConflictPublishesNothing verifies a duplicate idempotency key
 // returns the conflict without emitting an event.
 func TestCreateConflictPublishesNothing(t *testing.T) {
-	existing := &models.Payment{ID: "pay-old", MerchantID: "m-1"}
+	existing := &domain.Payment{ID: "pay-old", MerchantID: "m-1"}
 	payments := &fakePayments{existing: existing}
 	pub := &webhooks.FakePublisher{}
-	svc := testService(payments, &fakeNetwork{}, pub)
+	svc := testService(payments, &fakeNetwork{}, pub, &webhooks.FakeEmailPublisher{}, &fakeAudit{})
 
 	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
 		t.Fatal("expected conflict")
 	}
 	if len(pub.Events) != 0 {
 		t.Fatalf("expected no events, got %+v", pub.Events)
+	}
+}
+
+// TestCreateRecordsAuditTrail verifies one success row per executed step.
+func TestCreateRecordsAuditTrail(t *testing.T) {
+	payments := &fakePayments{}
+	audit := &fakeAudit{}
+	svc := testService(payments, &fakeNetwork{}, &webhooks.FakePublisher{}, &webhooks.FakeEmailPublisher{}, audit)
+
+	p, err := svc.Create(context.Background(), "m-1", 500, "k-1")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	want := []string{"insert-payment", "authorize", "call-api-capture", "send-webhook"}
+	if len(audit.steps) != len(want) {
+		t.Fatalf("expected %d audit rows, got %+v", len(want), audit.steps)
+	}
+	for i, name := range want {
+		got := audit.steps[i]
+		if got.Step != name || got.Outcome != "success" || got.Reason != "" {
+			t.Fatalf("bad row %d: %+v", i, got)
+		}
+		if got.PaymentID != p.ID || got.SagaID == "" {
+			t.Fatalf("bad identity in row %d: %+v", i, got)
+		}
+	}
+}
+
+// TestCreateFailureRecordsReason verifies the failing step's row carries
+// the error text while earlier steps record success.
+func TestCreateFailureRecordsReason(t *testing.T) {
+	payments := &fakePayments{}
+	audit := &fakeAudit{}
+	svc := testService(payments, &fakeNetwork{authErr: errors.New("refused")}, &webhooks.FakePublisher{}, &webhooks.FakeEmailPublisher{}, audit)
+
+	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(audit.steps) != 2 {
+		t.Fatalf("expected 2 audit rows, got %+v", audit.steps)
+	}
+	if audit.steps[0].Step != "insert-payment" || audit.steps[0].Outcome != "success" {
+		t.Fatalf("bad first row: %+v", audit.steps[0])
+	}
+	last := audit.steps[1]
+	if last.Step != "authorize" || last.Outcome != "failure" {
+		t.Fatalf("bad failure row: %+v", last)
+	}
+	if !strings.Contains(last.Reason, "refused") {
+		t.Fatalf("reason missing cause: %+v", last)
+	}
+}
+
+// TestCreateEmailPublishesOnSuccess verifies one email event with the
+// payment's identity follows a successful creation.
+func TestCreateEmailPublishesOnSuccess(t *testing.T) {
+	payments := &fakePayments{}
+	emails := &webhooks.FakeEmailPublisher{}
+	svc := testService(payments, &fakeNetwork{}, &webhooks.FakePublisher{}, emails, &fakeAudit{})
+
+	p, err := svc.Create(context.Background(), "m-1", 500, "k-1")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(emails.Events) != 1 {
+		t.Fatalf("expected 1 email event, got %d", len(emails.Events))
+	}
+	got := emails.Events[0]
+	if got.PaymentID != p.ID || got.MerchantID != "m-1" || got.Amount != 500 {
+		t.Fatalf("bad email event: %+v for payment %+v", got, p)
+	}
+}
+
+// TestCreateEmailPublishesNothingOnFailure verifies a failed creation emits
+// no email event.
+func TestCreateEmailPublishesNothingOnFailure(t *testing.T) {
+	payments := &fakePayments{}
+	emails := &webhooks.FakeEmailPublisher{}
+	svc := testService(payments, &fakeNetwork{authErr: errors.New("refused")}, &webhooks.FakePublisher{}, emails, &fakeAudit{})
+
+	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(emails.Events) != 0 {
+		t.Fatalf("expected no email events, got %+v", emails.Events)
+	}
+}
+
+// TestEmailPublishFailureFailsLoudly pins the accepted posture: the saga
+// steps already succeeded, so there is nothing to unwind — the error
+// surfaces to the caller.
+func TestEmailPublishFailureFailsLoudly(t *testing.T) {
+	payments := &fakePayments{}
+	emails := &webhooks.FakeEmailPublisher{Err: errors.New("broker down")}
+	svc := testService(payments, &fakeNetwork{}, &webhooks.FakePublisher{}, emails, &fakeAudit{})
+
+	if _, err := svc.Create(context.Background(), "m-1", 500, "k-1"); err == nil {
+		t.Fatal("expected publish error")
 	}
 }

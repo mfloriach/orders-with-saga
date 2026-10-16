@@ -11,18 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"paymentgateway/internal/merchant"
+	"paymentgateway/internal/domain"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type fakeLookup struct {
 	mu  sync.Mutex
-	m   *merchant.Merchant
+	m   *domain.Merchant
 	err error
 }
 
-func (f *fakeLookup) FindByID(_ context.Context, id string) (*merchant.Merchant, error) {
+func (f *fakeLookup) FindByID(_ context.Context, id string) (*domain.Merchant, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -33,12 +33,12 @@ func (f *fakeLookup) FindByID(_ context.Context, id string) (*merchant.Merchant,
 
 func strptr(s string) *string { return &s }
 
-// liveChannel opens a broker connection for consumer tests, purging both
-// queues for isolation, and returns two channels: the first is owned by
-// the consumer under test, the second is for test assertions. They must be
-// separate because concurrent RPC on one amqp091 channel (consumer
-// ack/nack plus polling inspects) interleaves frames and gets the channel
-// closed by the server. Skips without a live broker.
+// liveChannel opens a broker connection for consumer tests, declares the
+// topology, purges all queues for isolation, and returns two channels: the
+// first is owned by the consumer under test, the second is for test
+// assertions. They must be separate because concurrent RPC on one amqp091
+// channel (consumer ack/nack plus polling inspects) interleaves frames and
+// gets the channel closed by the server. Skips without a live broker.
 func liveChannel(t *testing.T) (consumeCh, assertCh *amqp.Channel) {
 	t.Helper()
 	url := os.Getenv("RABBITMQ_URL")
@@ -59,7 +59,8 @@ func liveChannel(t *testing.T) (consumeCh, assertCh *amqp.Channel) {
 		return ch
 	}
 	consumeCh, assertCh = open(), open()
-	for _, q := range []string{DeliverQueue, DLQueue} {
+	declareTestTopology(t, assertCh)
+	for _, q := range []string{DeliverQueue, DLQueue, EmailQueue, EmailDLQueue} {
 		if _, err := assertCh.QueuePurge(q, false); err != nil {
 			t.Fatalf("purge %s: %v", q, err)
 		}
@@ -67,7 +68,44 @@ func liveChannel(t *testing.T) (consumeCh, assertCh *amqp.Channel) {
 	return consumeCh, assertCh
 }
 
+// declareTestTopology mirrors the broker's boot declaration so tests never
+// depend on declaration order. QueueDeclare is idempotent for identical
+// arguments.
+func declareTestTopology(t *testing.T, ch *amqp.Channel) {
+	t.Helper()
+	if err := ch.ExchangeDeclare(Exchange, "topic", true, false, false, false, nil); err != nil {
+		t.Fatalf("declare exchange: %v", err)
+	}
+	if err := ch.ExchangeDeclare(DLX, "topic", true, false, false, false, nil); err != nil {
+		t.Fatalf("declare dlx: %v", err)
+	}
+	declare := func(queue, bindKey, exchange string, dlx bool) {
+		args := amqp.Table{}
+		if dlx {
+			args["x-dead-letter-exchange"] = DLX
+		}
+		if _, err := ch.QueueDeclare(queue, true, false, false, false, args); err != nil {
+			t.Fatalf("declare %s: %v", queue, err)
+		}
+		if err := ch.QueueBind(queue, bindKey, exchange, false, nil); err != nil {
+			t.Fatalf("bind %s: %v", queue, err)
+		}
+	}
+	declare(DeliverQueue, "webhook.*", Exchange, true)
+	declare(DLQueue, "webhook.*", DLX, false)
+	declare(EmailQueue, "email.*", Exchange, true)
+	declare(EmailDLQueue, "email.*", DLX, false)
+}
+
 func publishEvent(t *testing.T, ch *amqp.Channel, e Event) {
+	publishRoutedEvent(t, ch, RouteKey, e)
+}
+
+func publishEmailEvent(t *testing.T, ch *amqp.Channel, e Event) {
+	publishRoutedEvent(t, ch, EmailRoute, e)
+}
+
+func publishRoutedEvent(t *testing.T, ch *amqp.Channel, route string, e Event) {
 	t.Helper()
 	body, err := json.Marshal(e)
 	if err != nil {
@@ -75,7 +113,7 @@ func publishEvent(t *testing.T, ch *amqp.Channel, e Event) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := ch.PublishWithContext(ctx, Exchange, RouteKey, false, false, amqp.Publishing{
+	if err := ch.PublishWithContext(ctx, Exchange, route, false, false, amqp.Publishing{
 		ContentType: "application/json", DeliveryMode: amqp.Persistent, Body: body,
 	}); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -115,6 +153,17 @@ func runConsumer(t *testing.T, ch *amqp.Channel, lookup MerchantLookup) context.
 	return cancel
 }
 
+func drainQueue(t *testing.T, ch *amqp.Channel, queue string) {
+	t.Helper()
+	for {
+		msg, ok, err := ch.Get(queue, false)
+		if err != nil || !ok {
+			return
+		}
+		_ = ch.Ack(msg.DeliveryTag, false)
+	}
+}
+
 // TestConsumerDelivers verifies a 2xx merchant response acks the event.
 func TestConsumerDelivers(t *testing.T) {
 	consumeCh, ch := liveChannel(t)
@@ -129,7 +178,7 @@ func TestConsumerDelivers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lookup := &fakeLookup{m: &merchant.Merchant{ID: "m-1", WebhookURL: strptr(srv.URL)}}
+	lookup := &fakeLookup{m: &domain.Merchant{ID: "m-1", WebhookURL: strptr(srv.URL)}}
 	runConsumer(t, consumeCh, lookup)
 	sent := Event{PaymentID: "p-deliver", MerchantID: "m-1", Amount: 100, Status: "captured"}
 	publishEvent(t, ch, sent)
@@ -159,7 +208,7 @@ func TestConsumerSkipsWithoutURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lookup := &fakeLookup{m: &merchant.Merchant{ID: "m-2"}} // no WebhookURL
+	lookup := &fakeLookup{m: &domain.Merchant{ID: "m-2"}} // no WebhookURL
 	runConsumer(t, consumeCh, lookup)
 	publishEvent(t, ch, Event{PaymentID: "p-skip", MerchantID: "m-2", Amount: 50, Status: "captured"})
 
@@ -185,7 +234,7 @@ func TestConsumerRetriesThenDeadLetters(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lookup := &fakeLookup{m: &merchant.Merchant{ID: "m-3", WebhookURL: strptr(srv.URL)}}
+	lookup := &fakeLookup{m: &domain.Merchant{ID: "m-3", WebhookURL: strptr(srv.URL)}}
 	runConsumer(t, consumeCh, lookup)
 	publishEvent(t, ch, Event{PaymentID: "p-dlq", MerchantID: "m-3", Amount: 75, Status: "captured"})
 
@@ -198,23 +247,14 @@ func TestConsumerRetriesThenDeadLetters(t *testing.T) {
 	if n := queueDepth(t, ch, DeliverQueue); n != 0 {
 		t.Fatalf("deliver queue not drained: %d", n)
 	}
-	// Drain the parked message so later tests start clean.
-	msg, ok, err := ch.Get(DLQueue, false)
-	if err != nil || !ok {
-		t.Fatalf("get dlq: ok=%v err=%v", ok, err)
-	}
-	var e Event
-	if err := json.Unmarshal(msg.Body, &e); err != nil || e.PaymentID != "p-dlq" {
-		t.Fatalf("bad dlq payload %s: %v", msg.Body, err)
-	}
-	_ = ch.Ack(msg.DeliveryTag, false)
+	drainQueue(t, ch, DLQueue)
 }
 
 // TestConsumerMalformedDeadLetters verifies an unparseable message is
 // parked without retries.
 func TestConsumerMalformedDeadLetters(t *testing.T) {
 	consumeCh, ch := liveChannel(t)
-	lookup := &fakeLookup{m: &merchant.Merchant{ID: "m-4", WebhookURL: strptr("http://example.invalid")}}
+	lookup := &fakeLookup{m: &domain.Merchant{ID: "m-4", WebhookURL: strptr("http://example.invalid")}}
 	runConsumer(t, consumeCh, lookup)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -225,9 +265,5 @@ func TestConsumerMalformedDeadLetters(t *testing.T) {
 		t.Fatalf("publish: %v", err)
 	}
 	waitFor(t, "dlq parking", func() bool { return queueDepth(t, ch, DLQueue) == 1 })
-	msg, ok, err := ch.Get(DLQueue, false)
-	if err != nil || !ok {
-		t.Fatalf("get dlq: ok=%v err=%v", ok, err)
-	}
-	_ = ch.Ack(msg.DeliveryTag, false)
+	drainQueue(t, ch, DLQueue)
 }

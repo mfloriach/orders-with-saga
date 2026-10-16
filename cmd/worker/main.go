@@ -39,17 +39,36 @@ func main() {
 	}
 	defer ch.Close()
 
+	emailCh, err := broker.Channel()
+	if err != nil {
+		log.Fatalf("could not open email channel: %v", err)
+	}
+	defer emailCh.Close()
+
 	logger := logging.New(os.Stdout)
+	repo := merchant.NewRepository(appDB)
 	consumer := webhooks.NewConsumer(ch,
-		merchant.NewRepository(appDB),
+		repo,
+		cfg.AMQPMaxAttempts,
+		time.Duration(cfg.AMQPRetryTTL)*time.Millisecond,
+	)
+	emailConsumer := webhooks.NewEmailConsumer(
+		emailCh,
+		repo,
+		webhooks.NewLogEmailSender(logger),
 		cfg.AMQPMaxAttempts,
 		time.Duration(cfg.AMQPRetryTTL)*time.Millisecond,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := consumer.Run(ctx); err != nil {
-		logger.Error("worker stopped with error", "error", err)
-		os.Exit(1)
+	errCh := make(chan error, 2)
+	go func() { errCh <- consumer.Run(ctx) }()
+	go func() { errCh <- emailConsumer.Run(ctx) }()
+	for range 2 {
+		if err := <-errCh; err != nil {
+			logger.Error("worker stopped with error", "error", err)
+			os.Exit(1)
+		}
 	}
 }

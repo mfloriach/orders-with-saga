@@ -1,172 +1,94 @@
 package repositories
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"time"
 
+	"paymentgateway/internal/domain"
 	"paymentgateway/pkg/apiclient"
 )
 
-// MasterCardConfig carries the card-network simulator settings. Zero
-// attempts/backoff fall back to apiclient single-shot behavior; prefer
-// explicit values from validated env.
-type MasterCardConfig struct {
-	BaseURL        string
-	APIKey         string
-	Timeout        time.Duration
-	OverallTimeout time.Duration
-	MaxAttempts    int
-	BaseBackoff    time.Duration
-	MaxBackoff     time.Duration
+// payment is the part of the simulator's payment representation we decode.
+type MasterCardResponse struct {
+	ID     string               `json:"id"`
+	Status domain.NetworkStatus `json:"status"`
 }
 
-// defaultOverallTimeout bounds one repo call (including its internal
-// retries) when OverallTimeout is unset.
-const defaultOverallTimeout = 10 * time.Second
-
-// httpError carries a non-2xx network status for Retryable classification.
-type httpError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *httpError) Error() string {
-	return fmt.Sprintf("mastercard: unexpected status %d: %s", e.StatusCode, e.Body)
-}
-
-// MasterCardRepository implements CardNetwork against the card-network
-// simulator. It satisfies CardNetwork at compile time.
+// MasterCardRepository implements domain.CardNetwork against the card-network
+// simulator. The injected client owns the base URL, auth header, per-attempt
+// timeout, and retry loop; this type knows only the simulator's paths and
+// payloads.
 type MasterCardRepository struct {
 	client *apiclient.Client
-	cfg    MasterCardConfig
 }
 
-func NewMasterCardRepository(client *apiclient.Client, cfg MasterCardConfig) *MasterCardRepository {
-	if cfg.OverallTimeout <= 0 {
-		cfg.OverallTimeout = defaultOverallTimeout
-	}
-	return &MasterCardRepository{client: client, cfg: cfg}
+func NewMasterCardRepository(client *apiclient.Client) *MasterCardRepository {
+	return &MasterCardRepository{client: client}
 }
 
-func (r *MasterCardRepository) policy() apiclient.Policy {
-	return apiclient.Policy{
-		MaxAttempts: r.cfg.MaxAttempts,
-		BaseBackoff: r.cfg.BaseBackoff,
-		MaxBackoff:  r.cfg.MaxBackoff,
-		Timeout:     r.cfg.Timeout,
-		RetryIf: func(resp *http.Response, err error) bool {
-			if err != nil {
-				return isTransient(err)
-			}
-			return resp.StatusCode >= 500
-		},
-	}
-}
-
-func (r *MasterCardRepository) authed(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
-	var reader *bytes.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	} else {
-		reader = bytes.NewReader(nil)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if r.cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+r.cfg.APIKey)
-	}
-	return req, nil
-}
-
-func decodePayment(resp *http.Response) (id, status string, err error) {
-	defer resp.Body.Close()
-	var out struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", "", err
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", "", err
-	}
-	return out.ID, out.Status, nil
-}
-
-func statusError(resp *http.Response) error {
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return &httpError{StatusCode: resp.StatusCode, Body: string(body)}
-}
-
-// Authenticate holds funds via idempotent PUT; the client retries
-// transient failures internally, so one call covers the whole attempt
-// budget.
+// Authorize holds funds via an idempotent PUT and returns the simulator's
+// authorize key, which Capture needs.
 func (r *MasterCardRepository) Authorize(ctx context.Context, paymentID string, amount int64, idemKey string) (string, error) {
+	path := "/payment/" + paymentID
 	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
-		return "", err
+		return "", &domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
-	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		return r.authed(ctx, http.MethodPut, r.cfg.BaseURL+"/payment/"+paymentID, body)
-	}, r.policy())
+	resp, err := r.client.Put(ctx, path, body)
 	if err != nil {
 		return "", err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", statusError(resp)
-	}
-	_, _, err = decodePayment(resp)
+	defer resp.Body.Close()
 
-	return "", err
+	var p MasterCardResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil {
+		return "", &domain.ErrorCardNetwork{Path: path, Err: err}
+	}
+
+	return p.ID, nil
 }
 
-// GetPayment fetches the remote (id, status) without interpreting it;
-// callers map the simulator vocabulary (accepted/rejected/...) themselves.
-func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string) (string, string, error) {
-	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		return r.authed(ctx, http.MethodGet, r.cfg.BaseURL+"/payment/"+paymentID, nil)
-	}, r.policy())
-
+// GetPayment fetches the remote (id, status) without interpreting it; callers
+// map the simulator vocabulary themselves.
+func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string) (domain.NetworkStatus, error) {
+	path := "/payment/" + paymentID
+	resp, err := r.client.Get(ctx, path)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", statusError(resp)
+	defer resp.Body.Close()
+
+	var p MasterCardResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil {
+		return domain.NetworkRejected, &domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
-	return decodePayment(resp)
+	return p.Status, nil
 }
 
-// Capture settles a previously authenticated payment via idempotent POST;
-// the client retries transient failures internally, so one call covers
-// the whole attempt budget.
-func (r *MasterCardRepository) Capture(ctx context.Context, authorizeId string) error {
-	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		return r.authed(ctx, http.MethodPost, r.cfg.BaseURL+"/payment/"+authorizeId+"/capture", nil)
-	}, r.policy())
-
+// Capture settles a previously authenticated payment via an idempotent POST.
+func (r *MasterCardRepository) Capture(ctx context.Context, authorizeID string) error {
+	path := "/payment/" + authorizeID + "/capture"
+	resp, err := r.client.Post(ctx, path, nil)
 	if err != nil {
 		return err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError(resp)
+	defer resp.Body.Close()
+
+	var p MasterCardResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil {
+		return &domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
-	_, _, err = decodePayment(resp)
+	if p.Status != domain.NetworkRejected {
+		return &domain.ErrorCardNetwork{Path: path, Err: fmt.Errorf("payment was not captured")}
+	}
 
-	return err
+	return nil
 }

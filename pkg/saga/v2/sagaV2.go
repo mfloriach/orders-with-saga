@@ -4,45 +4,43 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"paymentgateway/internal/domain"
 	"time"
 )
 
-type PaymentWorkflow struct {
-	domain.Payment
-
-	Pending       *domain.PaymentPending
-	Authenticated *domain.PaymentAuthenticated
-	Captured      *domain.PaymentCaptured
+type SagaError struct {
+	Step    string
+	Err     error
+	Details string
 }
 
-type Step interface {
+func (s SagaError) Error() string {
+	return fmt.Sprintf("saga error: %v, %v, %v", s.Step, s.Err, s.Details)
+}
+
+type Step[T any] interface {
 	Name() string
-	Do(context.Context, *PaymentWorkflow) error
-	Compensate(context.Context, *PaymentWorkflow) error
+	Do(context.Context, *T) error
+	Compensate(context.Context, *T) error
 }
 
-type Saga struct {
-	steps               []Step
+type Saga[T any] struct {
+	steps               []Step[T]
 	compensationTimeout time.Duration
 }
 
-func New(steps ...Step) *Saga {
-	return &Saga{
+func New[T any](steps ...Step[T]) *Saga[T] {
+	return &Saga[T]{
 		steps:               steps,
 		compensationTimeout: 10 * time.Second,
 	}
 }
 
-func (s *Saga) Execute(
-	ctx context.Context,
-	w *PaymentWorkflow,
-) error {
-	completed := make([]Step, 0, len(s.steps))
+func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
+	completed := make([]Step[T], 0, len(s.steps))
 
 	for _, step := range s.steps {
 		if err := ctx.Err(); err != nil {
-			return s.rollback(ctx, w, completed, err)
+			return fmt.Errorf("timeout")
 		}
 
 		if err := step.Do(ctx, w); err != nil {
@@ -61,10 +59,10 @@ func (s *Saga) Execute(
 	return nil
 }
 
-func (s *Saga) rollback(
+func (s *Saga[T]) rollback(
 	ctx context.Context,
-	w *PaymentWorkflow,
-	completed []Step,
+	w *T,
+	completed []Step[T],
 	cause error,
 ) error {
 	// Compensation must still run if the original context was canceled.

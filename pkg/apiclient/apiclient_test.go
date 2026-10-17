@@ -140,6 +140,25 @@ func TestNoRetryOn4xx(t *testing.T) {
 	}
 }
 
+// TestFalsePredicateStops verifies a predicate that declines ends the loop
+// after a single attempt.
+func TestFalsePredicateStops(t *testing.T) {
+	s := &script{codes: []int{500}}
+	srv := httptest.NewServer(http.HandlerFunc(s.handler))
+	defer srv.Close()
+
+	c := New(nil, WithRetry(3, time.Millisecond, 5*time.Millisecond, func(*http.Response, error) bool { return false }))
+	resp, err := c.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	calls, _, _, _, _ := s.snapshot()
+	if resp.StatusCode != 500 || calls != 1 {
+		t.Fatalf("status=%d calls=%d", resp.StatusCode, calls)
+	}
+}
+
 // TestExhaustedReturnsLast verifies the final retryable response surfaces.
 func TestExhaustedReturnsLast(t *testing.T) {
 	s := &script{codes: []int{500, 500, 500, 500}}

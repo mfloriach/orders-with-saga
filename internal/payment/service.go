@@ -3,10 +3,13 @@ package payment
 import (
 	"context"
 	"fmt"
-	"uuid"
 
 	"paymentgateway/internal/domain"
-	"paymentgateway/internal/webhooks"
+	"paymentgateway/internal/payment/workflow"
+
+	saga "paymentgateway/pkg/saga/v2"
+
+	"github.com/google/uuid"
 )
 
 type merchantStore interface {
@@ -17,22 +20,26 @@ type Service struct {
 	payments    domain.PaymentRepository
 	merchants   merchantStore
 	cardNetwork domain.CardNetwork
+	saga        *saga.Saga[workflow.PaymentWorkflow]
 }
 
 func NewService(
 	payments domain.PaymentRepository,
 	merchants merchantStore,
-	cardNetwork domain.CardNetwork,
-	events webhooks.Publisher,
+	saga *saga.Saga[workflow.PaymentWorkflow],
 ) *Service {
 	return &Service{
-		payments:    payments,
-		merchants:   merchants,
-		cardNetwork: cardNetwork,
+		payments:  payments,
+		merchants: merchants,
+		saga:      saga,
 	}
 }
 
 func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.PaymentCaptured, error) {
+	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
+		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
+	}
+
 	existing, err := s.payments.FindByIdem(ctx, merchantID, idemKey)
 	if existing != nil {
 		return nil, &domain.ConflictError{Existing: existing}
@@ -41,37 +48,21 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		return nil, fmt.Errorf("payment: failed to check idempotency: %w", err)
 	}
 
-	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
-		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
-	}
-
 	pPending := &domain.PaymentPending{ID: uuid.New().String(), MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
-	ctx = context.WithValue(ctx, "paymentID", pPending.ID)
+	wf := workflow.PaymentWorkflow{Pending: pPending}
 
 	if err := s.payments.New(ctx, pPending); err != nil {
 		return nil, err
 	}
 
-	authorizeId, err := s.cardNetwork.Authorize(ctx, pPending.ID, pPending.Amount, idemKey)
-	if err != nil {
-		s.payments.Failed(ctx, pPending.ID, fmt.Errorf("payment: failed to authorize: %w", err))
+	ctx = context.WithValue(ctx, "paymentID", pPending.ID)
+	if err := s.saga.Execute(ctx, &wf); err != nil {
+		if _, err := s.payments.Failed(ctx, pPending.ID, err); err != nil {
+			return nil, err
+		}
+
 		return nil, err
 	}
 
-	pAuthorize, err := s.payments.Authorized(ctx, *pPending, authorizeId)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.cardNetwork.Capture(ctx, pAuthorize.ID); err != nil {
-		s.payments.Failed(ctx, pAuthorize.ID, fmt.Errorf("payment: failed to capture: %w", err))
-		return nil, err
-	}
-
-	pCaptured, err := s.payments.Captured(ctx, pAuthorize)
-	if err != nil {
-		return nil, err
-	}
-
-	return &pCaptured, nil
+	return wf.Captured, nil
 }

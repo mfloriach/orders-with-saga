@@ -1,12 +1,10 @@
 package webhooks
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -112,15 +110,12 @@ func (webhookNotifier) target(m *domain.Merchant) string {
 
 func (n webhookNotifier) send(ctx context.Context, target string, body []byte) error {
 	// Single attempt per outer try: the consumer owns retry-vs-DLQ via the
-	// x-attempts header, so inner retries would bypass the cap.
-	resp, err := n.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		return req, nil
-	}, apiclient.Policy{MaxAttempts: 1, Timeout: httpTimeout})
+	// x-attempts header, so inner retries would bypass the cap. One attempt is
+	// the client's default; the target is an absolute merchant URL.
+	resp, err := n.client.Post(ctx, target, body,
+		apiclient.WithHeader("Content-Type", "application/json"),
+		apiclient.WithTimeout(httpTimeout),
+	)
 	if err != nil {
 		return err
 	}

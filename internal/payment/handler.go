@@ -20,7 +20,7 @@ type Handler struct{ svc creator }
 // The raw Idempotency-Key header is passed through; key resolution lives
 // in the service.
 type creator interface {
-	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.Payment, error)
+	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.PaymentCaptured, error)
 }
 
 func NewHandler(svc creator) *Handler { return &Handler{svc} }

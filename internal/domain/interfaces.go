@@ -35,7 +35,7 @@ type CardNetwork interface {
 	Capture(ctx context.Context, authorizeKey string) error
 	// GetPayment reports the remote (id, status) for paymentID without
 	// interpreting it; callers map the simulator vocabulary themselves.
-	GetPayment(ctx context.Context, paymentID string) (id, status string, err error)
+	GetPayment(ctx context.Context, paymentID string) (status NetworkStatus, err error)
 }
 
 type ErrorCardNetwork struct {

@@ -1,92 +1,192 @@
 // Package apiclient is a stdlib HTTP client with bounded retries.
 //
-// Retry policy lives here and only here: callers pass what to build and
-// when to retry, and get back the final attempt. Backoff is exponential
-// with jitter, capped, and honors context cancellation between attempts.
+// A Client is configured once at construction (base URL, default headers,
+// retry policy, per-attempt timeout) and then issues requests through its
+// verb methods. Backoff is exponential with jitter, capped, and honors
+// context cancellation between attempts.
 package apiclient
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// Policy bounds a Do call. MaxAttempts counts the initial try plus retries;
-// values < 1 mean one attempt. RetryIf decides per attempt; nil retries
-// transport errors only and returns any HTTP response as-is.
-type Policy struct {
-	BaseURL string
-	APIKey  string
+// Option configures a Client at construction, or a single request when passed
+// to a verb. For a request, options layer over the client's defaults and later
+// options win.
+type Option func(*config)
 
-	MaxAttempts int
-	BaseBackoff time.Duration
-	MaxBackoff  time.Duration
-	Timeout     time.Duration // per-attempt timeout; 0 = none
-	RetryIf     func(resp *http.Response, err error) bool
+type config struct {
+	baseURL     string
+	headers     http.Header
+	maxAttempts int
+	baseBackoff time.Duration
+	maxBackoff  time.Duration
+	timeout     time.Duration
 }
 
-// Client wraps an *http.Client. A nil inner client means http.DefaultClient.
-type Client struct{ http *http.Client }
+// WithBaseURL sets the prefix for relative request paths. Absolute paths
+// (http:// or https://) bypass it.
+func WithBaseURL(u string) Option { return func(c *config) { c.baseURL = u } }
 
-func New(h *http.Client) *Client {
+// WithHeader sets one default header, replacing any earlier value for key.
+func WithHeader(key, value string) Option {
+	return func(c *config) {
+		if c.headers == nil {
+			c.headers = http.Header{}
+		}
+		c.headers.Set(key, value)
+	}
+}
+
+// WithHeaders adds default headers.
+func WithHeaders(h http.Header) Option {
+	return func(c *config) {
+		if c.headers == nil {
+			c.headers = http.Header{}
+		}
+		for k, vs := range h {
+			c.headers[k] = append([]string(nil), vs...)
+		}
+	}
+}
+
+// WithTimeout bounds each attempt's request build and send; 0 means none.
+func WithTimeout(d time.Duration) Option { return func(c *config) { c.timeout = d } }
+
+// WithRetry sets the retry policy. maxAttempts counts the initial try plus
+// retries; values < 1 mean one attempt. retryIf decides per attempt.
+func WithRetry(maxAttempts int, baseBackoff, maxBackoff time.Duration) Option {
+	return func(c *config) {
+		c.maxAttempts = maxAttempts
+		c.baseBackoff = baseBackoff
+		c.maxBackoff = maxBackoff
+	}
+}
+
+// Client issues HTTP requests with a fixed policy. A nil inner client means
+// http.DefaultClient.
+type Client struct {
+	http *http.Client
+	cfg  config
+}
+
+// New builds a Client. A nil h means http.DefaultClient; options set the base
+// URL, default headers, retry policy, and per-attempt timeout.
+func New(h *http.Client, opts ...Option) *Client {
 	if h == nil {
 		h = http.DefaultClient
 	}
-	return &Client{http: h}
+	c := &Client{http: h}
+	for _, o := range opts {
+		o(&c.cfg)
+	}
+	return c
 }
 
-func (c *Client) httpClient() *http.Client {
-	if c == nil || c.http == nil {
-		return http.DefaultClient
-	}
-	return c.http
+// Get issues a GET. See Do.
+func (c *Client) Get(ctx context.Context, path string, opts ...Option) (*http.Response, error) {
+	return c.Do(ctx, http.MethodGet, path, nil, opts...)
+}
+
+// Post issues a POST with body.
+func (c *Client) Post(ctx context.Context, path string, body []byte, opts ...Option) (*http.Response, error) {
+	return c.Do(ctx, http.MethodPost, path, body, opts...)
+}
+
+// Put issues a PUT with body.
+func (c *Client) Put(ctx context.Context, path string, body []byte, opts ...Option) (*http.Response, error) {
+	return c.Do(ctx, http.MethodPut, path, body, opts...)
+}
+
+// Patch issues a PATCH with body.
+func (c *Client) Patch(ctx context.Context, path string, body []byte, opts ...Option) (*http.Response, error) {
+	return c.Do(ctx, http.MethodPatch, path, body, opts...)
+}
+
+// Delete issues a DELETE.
+func (c *Client) Delete(ctx context.Context, path string, opts ...Option) (*http.Response, error) {
+	return c.Do(ctx, http.MethodDelete, path, nil, opts...)
 }
 
 // Do builds and sends one request per attempt until success, a terminal
-// result, the budget is spent, or ctx ends. Intermediate response bodies
-// are drained and closed for connection reuse; the returned body (if any)
-// belongs to the caller. A builder error never retries.
-func (c *Client) Do(ctx context.Context, build func(ctx context.Context) (*http.Request, error), p Policy) (*http.Response, error) {
-	attempts := p.MaxAttempts
+// result, the budget is spent, or ctx ends. A relative path joins the client's
+// base URL; an absolute path is used as-is. Intermediate response bodies are
+// drained and closed for connection reuse; the returned body (if any) belongs
+// to the caller. A request-build error never retries.
+func (c *Client) Do(ctx context.Context, method, path string, body []byte, opts ...Option) (*http.Response, error) {
+	cfg := c.cfg.clone()
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	attempts := cfg.maxAttempts
 	if attempts < 1 {
 		attempts = 1
 	}
-	retryIf := p.RetryIf
-	if retryIf == nil {
-		retryIf = func(_ *http.Response, err error) bool { return err != nil }
-	}
+
+	endpoint := strings.TrimRight(cfg.baseURL, "/") + "/" + strings.TrimLeft(path, "/")
 
 	var resp *http.Response
 	var err error
 	for a := 0; a < attempts; a++ {
-		if a > 0 && !sleep(ctx, backoff(p.BaseBackoff, p.MaxBackoff, a)) {
+		if a > 0 && !sleep(ctx, backoff(cfg.baseBackoff, cfg.maxBackoff, a)) {
 			break
 		}
 		attemptCtx := ctx
 		cancel := context.CancelFunc(func() {})
-		if p.Timeout > 0 {
-			attemptCtx, cancel = context.WithTimeout(ctx, p.Timeout)
+		if cfg.timeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, cfg.timeout)
 		}
+
+		var reqBody io.Reader
+		if body != nil {
+			reqBody = bytes.NewReader(body)
+		}
+
 		var req *http.Request
-		req, err = build(attemptCtx)
+		req, err = http.NewRequestWithContext(attemptCtx, method, endpoint, reqBody)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
-		resp, err = c.httpClient().Do(req)
+		for k, vs := range cfg.headers {
+			req.Header[k] = append([]string(nil), vs...)
+		}
+
+		resp, err = c.http.Do(req)
 		cancel()
-		if !retryIf(resp, err) || a == attempts-1 {
+		if a == attempts-1 {
 			return resp, err
 		}
+
 		drainClose(resp)
 		resp = nil
 	}
+
 	if err == nil {
 		err = ctx.Err()
 	}
+
 	return nil, err
+}
+
+// clone deep-copies the header map so per-request options never mutate the
+// client's defaults.
+func (c config) clone() config {
+	if c.headers != nil {
+		h := make(http.Header, len(c.headers))
+		for k, vs := range c.headers {
+			h[k] = append([]string(nil), vs...)
+		}
+		c.headers = h
+	}
+	return c
 }
 
 // backoff returns the capped exponential delay for retry number a (1-based)

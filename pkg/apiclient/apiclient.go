@@ -17,6 +17,9 @@ import (
 // values < 1 mean one attempt. RetryIf decides per attempt; nil retries
 // transport errors only and returns any HTTP response as-is.
 type Policy struct {
+	BaseURL string
+	APIKey  string
+
 	MaxAttempts int
 	BaseBackoff time.Duration
 	MaxBackoff  time.Duration

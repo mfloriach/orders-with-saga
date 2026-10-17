@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"time"
 
@@ -53,11 +51,6 @@ func NewMasterCardRepository(client *apiclient.Client, cfg MasterCardConfig) *Ma
 		cfg.OverallTimeout = defaultOverallTimeout
 	}
 	return &MasterCardRepository{client: client, cfg: cfg}
-}
-
-// withOverallTimeout bounds one call including its internal retries.
-func (r *MasterCardRepository) withOverallTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, r.cfg.OverallTimeout)
 }
 
 func (r *MasterCardRepository) policy() apiclient.Policy {
@@ -118,34 +111,30 @@ func statusError(resp *http.Response) error {
 // Authenticate holds funds via idempotent PUT; the client retries
 // transient failures internally, so one call covers the whole attempt
 // budget.
-func (r *MasterCardRepository) Authenticate(ctx context.Context, paymentID string, amount int64, idemKey string) error {
+func (r *MasterCardRepository) Authorize(ctx context.Context, paymentID string, amount int64, idemKey string) (string, error) {
 	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	ctx, cancel := r.withOverallTimeout(ctx)
-	defer cancel()
 	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
 		return r.authed(ctx, http.MethodPut, r.cfg.BaseURL+"/payment/"+paymentID, body)
 	}, r.policy())
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError(resp)
+		return "", statusError(resp)
 	}
 	_, _, err = decodePayment(resp)
 
-	return err
+	return "", err
 }
 
 // GetPayment fetches the remote (id, status) without interpreting it;
 // callers map the simulator vocabulary (accepted/rejected/...) themselves.
 func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string) (string, string, error) {
-	ctx, cancel := r.withOverallTimeout(ctx)
-	defer cancel()
 	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
 		return r.authed(ctx, http.MethodGet, r.cfg.BaseURL+"/payment/"+paymentID, nil)
 	}, r.policy())
@@ -164,16 +153,9 @@ func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string)
 // Capture settles a previously authenticated payment via idempotent POST;
 // the client retries transient failures internally, so one call covers
 // the whole attempt budget.
-func (r *MasterCardRepository) Capture(ctx context.Context, paymentID string, amount int64, idemKey string) error {
-	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := r.withOverallTimeout(ctx)
-	defer cancel()
+func (r *MasterCardRepository) Capture(ctx context.Context, authorizeId string) error {
 	resp, err := r.client.Do(ctx, func(ctx context.Context) (*http.Request, error) {
-		return r.authed(ctx, http.MethodPost, r.cfg.BaseURL+"/payment/"+paymentID+"/capture", body)
+		return r.authed(ctx, http.MethodPost, r.cfg.BaseURL+"/payment/"+authorizeId+"/capture", nil)
 	}, r.policy())
 
 	if err != nil {
@@ -187,22 +169,4 @@ func (r *MasterCardRepository) Capture(ctx context.Context, paymentID string, am
 	_, _, err = decodePayment(resp)
 
 	return err
-}
-
-// Retryable classifies errors for the seam: transport transients and 5xx
-// (via httpError) retry; 4xx, decode failures, and anything else do not.
-func (r *MasterCardRepository) Retryable(err error) bool {
-	var he *httpError
-	if errors.As(err, &he) {
-		return he.StatusCode >= 500
-	}
-	return isTransient(err)
-}
-
-func isTransient(err error) bool {
-	var ne net.Error
-	if errors.As(err, &ne) && (ne.Timeout() || ne.Temporary()) {
-		return true
-	}
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }

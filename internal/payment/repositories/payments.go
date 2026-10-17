@@ -51,20 +51,6 @@ func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, 
 	return &p, err
 }
 
-// EnqueueReconciliation records an in-doubt payment for later batch
-// processing. Re-enqueue of the same payment is a no-op.
-func (r *PaymentDatabaseRepository) EnqueueReconciliation(ctx context.Context, paymentID, idemKey, step string, cause error) error {
-	msg := ""
-	if cause != nil {
-		msg = cause.Error()
-	}
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO reconciliation_outbox (payment_id, idempotency_key, step, error)
-		 VALUES ($1,$2,$3,$4) ON CONFLICT (payment_id) DO NOTHING`,
-		paymentID, idemKey, step, msg)
-	return err
-}
-
 func (r *PaymentDatabaseRepository) MarkFailed(ctx context.Context, p *domain.Payment) error {
 	p.Status = domain.StatusFailed
 	result, err := r.db.ExecContext(ctx, `
@@ -89,9 +75,6 @@ func (r *PaymentDatabaseRepository) MarkFailed(ctx context.Context, p *domain.Pa
 	return nil
 }
 
-// MarkAuthorized moves a pending payment to authorized. The pending
-// precondition makes double-marking fail loudly instead of rewriting
-// history.
 func (r *PaymentDatabaseRepository) MarkAuthorized(ctx context.Context, p *domain.Payment) error {
 	p.Status = domain.StatusAuthorized
 	result, err := r.db.ExecContext(ctx, `
@@ -138,4 +121,57 @@ func (r *PaymentDatabaseRepository) MarkCaptured(ctx context.Context, p *domain.
 	}
 
 	return nil
+}
+
+////////
+
+func (r *PaymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPending) error {
+	p.ID = uuid.NewString()
+	p.Status = domain.StatusPending
+
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO payments (id, merchant_id, amount, idempotency_key, status) VALUES ($1,$2,$3,$4,$5)`,
+		p.ID, p.MerchantID, p.Amount, p.IdempotencyKey, p.Status)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrConflict
+		}
+		return err
+	}
+
+	return r.db.QueryRowContext(ctx,
+		`SELECT created_at FROM payments WHERE id=$1`, p.ID).Scan(&p.CreatedAt)
+}
+
+func (r *PaymentDatabaseRepository) Authorized(ctx context.Context, p domain.PaymentPending) (domain.PaymentAuthenticated, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE payments
+		SET status = 'authorized'
+		WHERE id = $1
+		  AND status = 'pending'
+	`, p.ID)
+	if err != nil {
+		return domain.PaymentAuthenticated{}, fmt.Errorf("mark payment %q as authorized: %w", p.ID, err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return domain.PaymentAuthenticated{}, fmt.Errorf("get affected rows for payment %q: %w", p.ID, err)
+	}
+
+	if rows == 0 {
+		return domain.PaymentAuthenticated{}, fmt.Errorf("payment %q not found or not pending", p.ID)
+	}
+
+	return domain.PaymentAuthenticated{PaymentPending: p}, nil
+}
+
+func (r *PaymentDatabaseRepository) Captured(ctx context.Context, p domain.PaymentAuthenticated) (domain.PaymentCaptured, error) {
+	return domain.PaymentCaptured{}, nil
+}
+
+func (r *PaymentDatabaseRepository) Failed(ctx context.Context, paymentId string, err error) (domain.PaymentFailed, error) {
+	return domain.PaymentFailed{}, nil
 }

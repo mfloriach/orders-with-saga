@@ -1,0 +1,18 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Per-step audit records
+The system SHALL write one audit row per executed saga step carrying payment id, step name, outcome, and timestamp. The row is recorded synchronously as each step completes, and an audit-write failure is logged without failing the payment.
+
+#### Scenario: Successful creation records every step
+- **WHEN** payment creation completes with `201`
+- **THEN** one audit row exists for each executed step with outcome success
+
+#### Scenario: Failed step records its error
+- **WHEN** a saga step fails
+- **THEN** that step's audit row carries outcome failure and the error text as reason
+
+#### Scenario: Audit write failure spares the payment
+- **WHEN** an audit row cannot be written
+- **THEN** the failure is logged with payment id and step, and payment creation proceeds unaffected

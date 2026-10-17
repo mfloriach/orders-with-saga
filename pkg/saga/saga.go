@@ -39,6 +39,7 @@ type Saga[T any] struct {
 	Steps  []Step[T]
 	logger *slog.Logger
 	tracer trace.Tracer
+	onStep func(ctx context.Context, item *T, step string, err error)
 }
 
 // DefaultTracerName is the instrumentation scope for sagas that do
@@ -47,6 +48,15 @@ const DefaultTracerName = "pkg/saga"
 
 // Option configures a Saga. The zero option set keeps the defaults.
 type Option[T any] func(*Saga[T])
+
+// WithID overrides the generated saga ID. Empty keeps the uuid.
+func WithID[T any](id string) Option[T] {
+	return func(s *Saga[T]) {
+		if id != "" {
+			s.ID = id
+		}
+	}
+}
 
 // WithLogger sets the saga logger. Nil keeps slog.Default().
 func WithLogger[T any](l *slog.Logger) Option[T] {
@@ -63,6 +73,17 @@ func WithTracerName[T any](name string) Option[T] {
 	return func(s *Saga[T]) {
 		if name != "" {
 			s.tracer = otel.Tracer(name)
+		}
+	}
+}
+
+// WithOnStep observes every executed step synchronously with its result.
+// It runs inside Run (so it must not block) and cannot fail the saga;
+// observers must not panic. Nil (default) observes nothing.
+func WithOnStep[T any](f func(ctx context.Context, item *T, step string, err error)) Option[T] {
+	return func(s *Saga[T]) {
+		if f != nil {
+			s.onStep = f
 		}
 	}
 }
@@ -113,7 +134,11 @@ func (s Saga[T]) Run(ctx context.Context, item *T) error {
 			}
 		}
 
-		if doErr := s.executeStepDo(ctx, st, item); doErr != nil {
+		doErr := s.executeStepDo(ctx, st, item)
+		if s.onStep != nil {
+			s.onStep(ctx, item, st.Name(), doErr)
+		}
+		if doErr != nil {
 			var indoubt *InDoubtError
 			if errors.As(doErr, &indoubt) {
 				s.logger.WarnContext(ctx, "saga step in-doubt, skipping unwind",

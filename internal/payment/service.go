@@ -2,29 +2,21 @@ package payment
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"uuid"
 
 	"paymentgateway/internal/domain"
-	"paymentgateway/internal/payment/steps"
 	"paymentgateway/internal/webhooks"
-	"paymentgateway/pkg/saga"
 )
 
 type merchantStore interface {
 	FindByID(context.Context, string) (*domain.Merchant, error)
 }
 
-type sagaProcedure interface {
-	Run(context.Context, *domain.Payment) error
-}
-
 type Service struct {
 	payments    domain.PaymentRepository
 	merchants   merchantStore
 	cardNetwork domain.CardNetwork
-	steps       []saga.Step[domain.Payment]
-	saga        sagaProcedure
 }
 
 func NewService(
@@ -33,18 +25,14 @@ func NewService(
 	cardNetwork domain.CardNetwork,
 	events webhooks.Publisher,
 ) *Service {
-	steps := steps.Registry(payments, cardNetwork, events)
-
 	return &Service{
 		payments:    payments,
 		merchants:   merchants,
 		cardNetwork: cardNetwork,
-		steps:       steps,
-		saga:        saga.New("create-payment", steps),
 	}
 }
 
-func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.Payment, error) {
+func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.PaymentCaptured, error) {
 	existing, err := s.payments.FindByIdem(ctx, merchantID, idemKey)
 	if existing != nil {
 		return nil, &domain.ConflictError{Existing: existing}
@@ -57,15 +45,33 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
 	}
 
-	p := &domain.Payment{MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
-	if err = s.saga.Run(ctx, p); err != nil {
-		var re *saga.RunError
-		if !errors.As(err, &re) {
-			return nil, fmt.Errorf("payment: failed to create %s: %w", p.ID, err)
-		}
+	pPending := &domain.PaymentPending{ID: uuid.New().String(), MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
+	ctx = context.WithValue(ctx, "paymentID", pPending.ID)
 
-		return nil, fmt.Errorf("payment: failed to create %s: %w", p.ID, err)
+	if err := s.payments.New(ctx, pPending); err != nil {
+		return nil, err
 	}
 
-	return p, nil
+	authorizeId, err := s.cardNetwork.Authorize(ctx, pPending.ID, pPending.Amount, idemKey)
+	if err != nil {
+		s.payments.Failed(ctx, pPending.ID, fmt.Errorf("payment: failed to authorize: %w", err))
+		return nil, err
+	}
+
+	pAuthorize, err := s.payments.Authorized(ctx, *pPending, authorizeId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.cardNetwork.Capture(ctx, pAuthorize.ID); err != nil {
+		s.payments.Failed(ctx, pAuthorize.ID, fmt.Errorf("payment: failed to capture: %w", err))
+		return nil, err
+	}
+
+	pCaptured, err := s.payments.Captured(ctx, pAuthorize)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pCaptured, nil
 }

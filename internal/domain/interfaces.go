@@ -2,33 +2,16 @@ package domain
 
 import (
 	"context"
+	"fmt"
 )
 
 type PaymentRepository interface {
-	InsertPending(ctx context.Context, p *Payment) error
 	FindByIdem(ctx context.Context, merchantID, key string) (*Payment, error)
-	MarkFailed(ctx context.Context, p *Payment) error
-	MarkAuthorized(ctx context.Context, p *Payment) error
-	MarkCaptured(ctx context.Context, p *Payment) error
-	EnqueueReconciliation(ctx context.Context, paymentID, idemKey, step string, cause error) error
-}
 
-// StepRecord is one saga step execution for the audit trail. Outcome is
-// "success" or "failure"; Reason carries the error text on failure.
-type StepRecord struct {
-	PaymentID string
-	SagaID    string
-	Step      string
-	Outcome   string
-	Reason    string
-}
-
-// AuditStore is the ledger side of Service. It mirrors AuditRepository's
-// method set so Service depends on an interface (as it does for app) and
-// package payment never imports the repositories subpackage — which
-// imports payment for the Payment type — avoiding an import cycle.
-type AuditStore interface {
-	RecordStep(ctx context.Context, r StepRecord) error
+	New(ctx context.Context, p *PaymentPending) error
+	Authorized(ctx context.Context, p PaymentPending, authorizationID string) (PaymentAuthenticated, error)
+	Captured(ctx context.Context, p PaymentAuthenticated) (PaymentCaptured, error)
+	Failed(ctx context.Context, paymentId string, err error) (PaymentFailed, error)
 }
 
 type NetworkStatus string
@@ -47,12 +30,25 @@ const (
 // status queries never double-execute the remote operation.
 type CardNetwork interface {
 	// Authenticate holds funds for paymentID via an idempotent authorize call.
-	Authenticate(ctx context.Context, paymentID string, amount int64, idemKey string) error
+	Authorize(ctx context.Context, paymentID string, amount int64, idemKey string) (authorizeKey string, err error)
 	// Capture settles a previously authenticated paymentID.
-	Capture(ctx context.Context, paymentID string, amount int64, idemKey string) error
+	Capture(ctx context.Context, authorizeKey string) error
 	// GetPayment reports the remote (id, status) for paymentID without
 	// interpreting it; callers map the simulator vocabulary themselves.
 	GetPayment(ctx context.Context, paymentID string) (id, status string, err error)
+}
+
+type ErrorCardNetwork struct {
+	Path string
+	Err  error
+}
+
+func (e *ErrorCardNetwork) Error() string {
+	return fmt.Sprintf("card network %s: %v", e.Path, e.Err)
+}
+
+func (e *ErrorCardNetwork) Unwrap() error {
+	return e.Err
 }
 
 type ConflictError struct{ Existing *Payment }

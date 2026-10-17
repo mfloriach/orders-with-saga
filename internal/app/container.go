@@ -103,7 +103,8 @@ func Build(cfg config.Config) (*Container, error) {
 	mH := merchant.NewHandler(mSvc)
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
-	pSvc := payment.NewService(pApp, mRepo, network, NewWebhookPublisher(broker))
+	pAudit := repositories.NewAuditRepository(ledgerDB)
+	pSvc := payment.NewService(pApp, pAudit, mRepo, network, NewWebhookPublisher(broker))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Broker: broker, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil

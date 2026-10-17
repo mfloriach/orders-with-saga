@@ -5,33 +5,25 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gofiber/fiber/v2"
 	"paymentgateway/pkg/logging"
+
+	"github.com/gofiber/fiber/v2"
 )
 
-type AppError struct {
-	Status  int
-	Code    string
-	Title   string
-	Details string
-	Fields  map[string]any
-	Headers map[string]string
+type appError struct {
+	Status  int               `json:"status"`
+	Code    string            `json:"code"`
+	Title   string            `json:"title"`
+	Details string            `json:"details,omitempty"`
+	Fields  map[string]any    `json:"fields,omitempty"`
+	Headers map[string]string `json:"-"`
 }
 
-func (e *AppError) Error() string {
+func (e *appError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Title)
 }
 
-func New(status int, code, title, details string) *AppError {
-	return &AppError{
-		Status:  status,
-		Code:    code,
-		Title:   title,
-		Details: details,
-	}
-}
-
-func (e *AppError) WithField(key string, value any) *AppError {
+func (e *appError) withField(key string, value any) *appError {
 	if e.Fields == nil {
 		e.Fields = make(map[string]any)
 	}
@@ -39,7 +31,7 @@ func (e *AppError) WithField(key string, value any) *AppError {
 	return e
 }
 
-func (e *AppError) WithHeader(key, value string) *AppError {
+func (e *appError) withHeader(key, value string) *appError {
 	if e.Headers == nil {
 		e.Headers = make(map[string]string)
 	}
@@ -48,7 +40,7 @@ func (e *AppError) WithHeader(key, value string) *AppError {
 }
 
 func Handler(c *fiber.Ctx, err error) error {
-	var appErr *AppError
+	var appErr *appError
 	if !errors.As(err, &appErr) {
 		status := http.StatusInternalServerError
 		var fe *fiber.Error

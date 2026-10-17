@@ -43,11 +43,11 @@ type ErrorCardNetwork struct {
 	Err  error
 }
 
-func (e *ErrorCardNetwork) Error() string {
+func (e ErrorCardNetwork) Error() string {
 	return fmt.Sprintf("card network %s: %v", e.Path, e.Err)
 }
 
-func (e *ErrorCardNetwork) Unwrap() error {
+func (e ErrorCardNetwork) Unwrap() error {
 	return e.Err
 }
 

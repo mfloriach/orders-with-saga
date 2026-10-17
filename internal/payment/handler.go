@@ -8,7 +8,7 @@ import (
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/pkg/apperr"
-	"paymentgateway/pkg/idempotency"
+	saga "paymentgateway/pkg/saga/v2"
 	"paymentgateway/pkg/validate"
 
 	"github.com/gofiber/fiber/v2"
@@ -37,7 +37,7 @@ type createBody struct {
 // @Produce      json
 // @Param        Idempotency-Key header string false "Idempotency key"
 // @Param        body body createBody true "Payment"
-// @Success      201  {object}  domain.Payment
+// @Success      201  {object}  domain.PaymentCaptured
 // @Failure      400  {object}  apperr.AppError
 // @Failure      404  {object}  apperr.AppError
 // @Failure      409  {object}  apperr.AppError
@@ -51,13 +51,17 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		return apperr.ValidationFailed(errs)
 	}
 
-	idemKey := c.Get("Idempotency-Key", idempotency.GenerateKey(c.Request().RequestURI()))
-
-	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, idemKey)
-	var ce *domain.ConflictError
+	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, c.Get("Idempotency-Key"))
+	var (
+		ce *domain.ConflictError
+		ecn *domain.ErrorCardNetwork
+		se  *saga.SagaError
+	)
 	switch {
 	case errors.Is(err, merchant.ErrNotFound):
 		return apperr.MerchantNotFound()
+	case errors.Is(err, domain.ErrConflict):
+		return apperr.IdempotencyConflict("")
 	case errors.As(err, &ce):
 		id := ""
 		if ce.Existing != nil {
@@ -65,6 +69,10 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 			c.Set("Idempotency-Key", ce.Existing.IdempotencyKey)
 		}
 		return apperr.IdempotencyConflict(id)
+	case errors.As(err, &ecn):
+		return apperr.BadGateway()
+	case errors.As(err, &se):
+		return apperr.BadGateway()
 	case err != nil:
 		return apperr.InternalError()
 	}

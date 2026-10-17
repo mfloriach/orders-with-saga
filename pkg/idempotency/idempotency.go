@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -19,3 +21,7 @@ func GenerateKey(req []byte) string {
 	sum := sha256.Sum256(req)
 	return "drv:" + hex.EncodeToString(sum[:])
 }
+
+// Derive mints a fresh key for a request that carried no Idempotency-Key.
+// Unique per call, so keyless requests are never deduped against each other.
+func Derive() string { return "drv:" + uuid.NewString() }

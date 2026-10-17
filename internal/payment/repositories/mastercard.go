@@ -34,19 +34,19 @@ func (r *MasterCardRepository) Authorize(ctx context.Context, paymentID string, 
 	path := "/payment/" + paymentID
 	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
-		return "", &domain.ErrorCardNetwork{Path: path, Err: err}
+		return "", domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	resp, err := r.client.Put(ctx, path, body)
 	if err != nil {
-		return "", err
+		return "", domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	defer resp.Body.Close()
 
 	var p MasterCardResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil {
-		return "", &domain.ErrorCardNetwork{Path: path, Err: err}
+		return "", domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	return p.ID, nil
@@ -58,7 +58,7 @@ func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string)
 	path := "/payment/" + paymentID
 	resp, err := r.client.Get(ctx, path)
 	if err != nil {
-		return "", err
+		return "", domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	defer resp.Body.Close()
@@ -76,18 +76,18 @@ func (r *MasterCardRepository) Capture(ctx context.Context, authorizeID string) 
 	path := "/payment/" + authorizeID + "/capture"
 	resp, err := r.client.Post(ctx, path, nil)
 	if err != nil {
-		return err
+		return domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	defer resp.Body.Close()
 
 	var p MasterCardResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&p); err != nil {
-		return &domain.ErrorCardNetwork{Path: path, Err: err}
+		return domain.ErrorCardNetwork{Path: path, Err: err}
 	}
 
 	if p.Status != domain.NetworkRejected {
-		return &domain.ErrorCardNetwork{Path: path, Err: fmt.Errorf("payment was not captured")}
+		return domain.ErrorCardNetwork{Path: path, Err: fmt.Errorf("payment was not captured")}
 	}
 
 	return nil

@@ -6,6 +6,7 @@ import (
 
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/payment/workflow"
+	"paymentgateway/pkg/idempotency"
 
 	saga "paymentgateway/pkg/saga/v2"
 
@@ -36,6 +37,8 @@ func NewService(
 }
 
 func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.PaymentCaptured, error) {
+	idemKey = resolveKey(idemKey)
+
 	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
 		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
 	}
@@ -65,4 +68,15 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 	}
 
 	return wf.Captured, nil
+}
+
+// resolveKey turns the optional Idempotency-Key header into the key we store
+// and dedupe on. An absent or oversized header gets a freshly derived key
+// instead of an error, so a keyless request creates a new payment rather than
+// colliding with an earlier one.
+func resolveKey(header string) string {
+	if header == "" || len(header) > idempotency.MaxKeyLength {
+		return idempotency.Derive()
+	}
+	return header
 }

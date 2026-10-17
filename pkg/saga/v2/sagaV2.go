@@ -40,17 +40,19 @@ func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
 
 	for _, step := range s.steps {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("timeout")
+			return SagaError{
+				Step:    step.Name(),
+				Err:     ctx.Err(),
+				Details: "timeout",
+			}
 		}
 
 		if err := step.Do(ctx, w); err != nil {
-			cause := fmt.Errorf(
-				"saga step %q failed: %w",
-				step.Name(),
-				err,
-			)
-
-			return s.rollback(ctx, w, completed, cause)
+			return SagaError{
+				Step:    step.Name(),
+				Err:     err,
+				Details: "step failed",
+			}
 		}
 
 		completed = append(completed, step)
@@ -59,7 +61,7 @@ func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
 	return nil
 }
 
-func (s *Saga[T]) rollback(
+func (s *Saga[T]) Reconsilate(
 	ctx context.Context,
 	w *T,
 	completed []Step[T],

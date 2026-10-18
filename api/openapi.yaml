@@ -1,0 +1,277 @@
+openapi: 3.0.1
+info:
+  title: Payment Gateway API
+  version: 1.0.0
+  description: |
+    Business endpoints for the payment gateway: merchant registration and
+    payment creation. Reference UI is served at GET /docs; this definition
+    is served at GET /openapi.yaml.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+paths:
+  /merchants:
+    post:
+      summary: Register a merchant
+      tags:
+        - merchants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MerchantCreate'
+      responses:
+        '201':
+          description: Merchant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/EmailTaken'
+  /payments:
+    post:
+      summary: Create a payment
+      tags:
+        - payments
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+          description: Idempotency key; derived as `drv:` + SHA-256 when absent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCreate'
+      responses:
+        '201':
+          description: Payment created (pending)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentCaptured'
+          headers:
+            Idempotency-Key:
+              schema:
+                type: string
+              description: Echoed idempotency key (client-provided or derived).
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/MerchantNotFound'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+components:
+  schemas:
+    MerchantCreate:
+      type: object
+      required:
+        - name
+        - email
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Acme Corp
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          example: billing@acme.example
+        webhook_url:
+          type: string
+          format: uri
+          maxLength: 2000
+          example: https://acme.example/webhooks
+      additionalProperties: false
+    Merchant:
+      type: object
+      required:
+        - id
+        - name
+        - email
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        name:
+          type: string
+          example: Acme Corp
+        email:
+          type: string
+          format: email
+          example: billing@acme.example
+        webhook_url:
+          type: string
+          format: uri
+          nullable: true
+          example: https://acme.example/webhooks
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-18T12:00:00Z'
+    PaymentCreate:
+      type: object
+      required:
+        - merchant_id
+        - amount
+      properties:
+        merchant_id:
+          type: string
+          format: uuid
+          example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        amount:
+          type: integer
+          minimum: 1
+          example: 2500
+      additionalProperties: false
+    Payment:
+      type: object
+      required:
+        - id
+        - merchant_id
+        - amount
+        - idempotency_key
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        merchant_id:
+          type: string
+          format: uuid
+          example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        amount:
+          type: integer
+          example: 2500
+        idempotency_key:
+          type: string
+          example: drv:abc123...
+        status:
+          type: string
+          enum:
+            - pending
+            - authorized
+            - captured
+            - failed
+          example: pending
+        created_at:
+          type: string
+          format: date-time
+          example: '2026-10-18T12:00:00Z'
+    PaymentCaptured:
+      allOf:
+        - $ref: '#/components/schemas/Payment'
+        - type: object
+          properties:
+            authentication_key:
+              type: string
+              nullable: true
+              example: null
+            paid_at:
+              type: string
+              format: date-time
+              nullable: true
+              example: null
+  responses:
+    ValidationError:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - code
+              - title
+            properties:
+              code:
+                type: string
+                example: validation_error
+              title:
+                type: string
+                example: Validation failed
+              details:
+                type: string
+                example: One or more fields are invalid.
+              errors:
+                type: object
+                additionalProperties:
+                  type: string
+              request_id:
+                type: string
+    MerchantNotFound:
+      description: Merchant not found
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - code
+              - title
+            properties:
+              code:
+                type: string
+                example: merchant_not_found
+              title:
+                type: string
+                example: Merchant not found
+              details:
+                type: string
+                example: No merchant exists with the given ID.
+              request_id:
+                type: string
+    IdempotencyConflict:
+      description: Duplicate idempotency key
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - code
+              - title
+            properties:
+              code:
+                type: string
+                example: idempotency_conflict
+              title:
+                type: string
+                example: Duplicate idempotency key
+              details:
+                type: string
+                example: A payment with this idempotency key already exists.
+              payment_id:
+                type: string
+              request_id:
+                type: string
+    EmailTaken:
+      description: Email already registered
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - code
+              - title
+            properties:
+              code:
+                type: string
+                example: email_taken
+              title:
+                type: string
+                example: Email already registered
+              details:
+                type: string
+                example: A merchant with this email already exists.
+              request_id:
+                type: string

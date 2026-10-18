@@ -34,6 +34,10 @@ func routes(f *fiber.App, cnt Container) {
 
 	f.Get("/ready", readyHandler(readyChecks(&cnt)))
 
+	f.Get("/openapi.yaml", openAPIHandler)
+
+	f.Get("/docs", docsHandler)
+
 	f.Use(ratelimit.Middleware(cnt.Redis, cnt.Config.RateLimit, time.Duration(cnt.Config.RateWindow)*time.Second))
 	f.Post("/merchants", cnt.Merchant.Create)
 	f.Post("/payments", cnt.Payment.Create)

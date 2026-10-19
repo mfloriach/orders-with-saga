@@ -104,7 +104,19 @@ func Build(cfg config.Config) (*Container, error) {
 	mH := merchant.NewHandler(mSvc)
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
-	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network))
+
+	webhookClient := apiclient.New(nil,
+		apiclient.WithHeader("Content-Type", "application/json"),
+		apiclient.WithTimeout(time.Duration(cfg.MCTimeout)*time.Second),
+		apiclient.WithRetry(
+			cfg.MCMaxAttempts,
+			time.Duration(cfg.MCBaseBackoff)*time.Millisecond,
+			time.Duration(cfg.MCMaxBackoff)*time.Millisecond,
+			nil,
+		),
+	)
+
+	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Broker: broker, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil

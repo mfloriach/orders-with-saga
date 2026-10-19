@@ -1,0 +1,31 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Async webhook delivery to merchant endpoint
+The system SHALL deliver each webhook event to the merchant's registered `webhook_url` from a background worker, independent of the payment response path. Payment creation additionally performs a synchronous merchant webhook call that can block the payment response; async delivery remains available for events not delivered synchronously.
+
+#### Scenario: Event delivered
+- **WHEN** a webhook event is consumed and the merchant has a `webhook_url`
+- **THEN** the worker POSTs the payment payload to that URL
+
+#### Scenario: Merchant without webhook URL skips delivery
+- **WHEN** a webhook event is consumed for a merchant with no `webhook_url`
+- **THEN** the event is acknowledged with no HTTP call and no retry
+
+## ADDED Requirements
+
+### Requirement: Synchronous webhook call within payment creation
+The system SHALL call the merchant's registered `webhook_url` synchronously as a saga step during payment creation, blocking the response until the call completes.
+
+#### Scenario: Webhook call succeeds
+- **WHEN** payment creation reaches the webhook step and the merchant's `webhook_url` returns `2xx`
+- **THEN** creation completes and the API returns `201`
+
+#### Scenario: Webhook call fails compensates prior steps
+- **WHEN** the merchant's `webhook_url` returns non-2xx or the call fails within the retry budget
+- **THEN** the payment is marked `failed`, the API returns `500`, and prior saga steps are compensated in reverse order
+
+#### Scenario: Merchant without webhook URL skips delivery
+- **WHEN** the merchant has no registered `webhook_url`
+- **THEN** no HTTP call is made and creation continues as if the webhook step succeeded

@@ -1,0 +1,10 @@
+Payment Successful
+
+Hello {{.MerchantName}},
+
+Your payment has been processed successfully.
+
+Payment ID: {{.PaymentID}}
+Amount: {{.Amount}}
+
+Thank you for your business.

@@ -9,7 +9,7 @@ import (
 )
 
 type emailStep struct {
-	Sender email.EmailSender
+	Sender email.Senders
 }
 
 func (e emailStep) Name() string { return "email" }
@@ -20,16 +20,9 @@ func (e emailStep) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return errors.New("payment is not captured")
 	}
 
-	subject := fmt.Sprintf("Payment Receipt - %s", p.ID)
-	body := fmt.Sprintf("Your payment of %d has been processed successfully.\nPayment ID: %s\nMerchant: %s", p.Amount, p.ID, w.Merchant.Name)
-	data := email.EmailData{
-		To:      w.User.Email,
-		Subject: subject,
-		Body:    body,
-	}
-
-	if err := e.Sender(ctx, data); err != nil {
-		return fmt.Errorf("email: failed to send: %w", err)
+	data := email.PaymentSuccessfully{Payment: *p, Merchant: *w.Merchant, User: w.User}
+	if err := e.Sender.SendPaymentSuccessfully(ctx, data); err != nil {
+		return fmt.Errorf("email could not be send")
 	}
 
 	return nil

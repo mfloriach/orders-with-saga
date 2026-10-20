@@ -18,10 +18,9 @@ type merchantStore interface {
 }
 
 type Service struct {
-	payments    domain.PaymentRepository
-	merchants   merchantStore
-	cardNetwork domain.CardNetwork
-	saga        *saga.Saga[workflow.PaymentWorkflow]
+	payments  domain.PaymentRepository
+	merchants merchantStore
+	saga      *saga.Saga[workflow.PaymentWorkflow]
 }
 
 func NewService(

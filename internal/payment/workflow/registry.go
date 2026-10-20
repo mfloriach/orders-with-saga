@@ -7,7 +7,7 @@ import (
 )
 
 type PaymentWorkflow struct {
-	Merchant: 		*domain.Merchant
+	Merchant *domain.Merchant
 
 	Pending       *domain.PaymentPending
 	Authenticated *domain.PaymentAuthenticated
@@ -15,14 +15,14 @@ type PaymentWorkflow struct {
 }
 
 func NewWorkflow(
-	payments domain.PaymentRepository, 
-	cardNetwork domain.CardNetwork, 
-	merchants MerchantLookup, 
-	client *apiclient.Client
+	payments domain.PaymentRepository,
+	cardNetwork domain.CardNetwork,
+	merchants MerchantLookup,
+	client *apiclient.Client,
 ) *saga.Saga[PaymentWorkflow] {
 	authorize := authorize{Payments: payments, CardNetwork: cardNetwork}
 	capture := capture{Payments: payments, CardNetwork: cardNetwork}
-	webhookStep := webhook{Merchants: merchants, Client: client}
+	webhookStep := webhook{Client: client}
 
 	return saga.New(authorize, capture, webhookStep)
 }

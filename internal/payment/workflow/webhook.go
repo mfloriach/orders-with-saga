@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
+	"uuid"
 
 	"paymentgateway/internal/domain"
-	"paymentgateway/internal/webhooks"
+	"paymentgateway/internal/payment/repositories"
 	"paymentgateway/pkg/apiclient"
 )
 
@@ -17,41 +19,37 @@ type MerchantLookup interface {
 }
 
 type webhook struct {
-	Merchants MerchantLookup
-	Client    *apiclient.Client
+	Client  *apiclient.Client
+	webhook repositories.MerchantWebhook
 }
 
 func (w webhook) Name() string { return "webhook" }
 
 func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
-	p := wf.StatusCaptured
+	p := wf.Captured
 	if p == nil {
 		return errors.New("payment is not captured")
 	}
 
-	
-
-	event := webhooks.Event{
-		PaymentID:  p.ID,
-		MerchantWebhook: wf.Merchant.WebhookURL,
-		Amount:     p.Amount,
-		Status:     string(domain.StatusCaptured),
-	}
-	body, err := json.Marshal(event)
+	payload, err := json.Marshal(domain.MerchantPaymentSusccessfull{
+		PaymentID: wf.Pending.ID,
+		Amount:    wf.Pending.Amount,
+		ProductID: "xxxx",
+	})
 	if err != nil {
 		return fmt.Errorf("webhook: failed to marshal event: %w", err)
 	}
 
-	resp, err := w.Client.Post(ctx, *m.WebhookURL, body,
-		apiclient.WithHeader("Content-Type", "application/json"),
-	)
-	if err != nil {
-		return fmt.Errorf("webhook: failed to notify merchant %s: %w", p.MerchantID, err)
+	event := domain.MerchantEvent{
+		ID:        uuid.New().String(),
+		Type:      domain.MerchantEventTypeSuccessfullPayment,
+		Merchant:  *wf.Merchant,
+		Payload:   payload,
+		CreatedAt: time.Now(),
 	}
 
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook: merchant %s returned %s", p.MerchantID, resp.Status)
+	if err := w.webhook.Notify(ctx, event); err != nil {
+		return fmt.Errorf("email coul not be send with id: %s", event.ID)
 	}
 
 	return nil

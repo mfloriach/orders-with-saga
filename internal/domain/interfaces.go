@@ -7,7 +7,6 @@ import (
 
 type PaymentRepository interface {
 	FindByIdem(ctx context.Context, merchantID, key string) (*Payment, error)
-
 	New(ctx context.Context, p *PaymentPending) error
 	Authorized(ctx context.Context, p PaymentPending, authorizationID string) (PaymentAuthenticated, error)
 	Captured(ctx context.Context, p PaymentAuthenticated) (PaymentCaptured, error)

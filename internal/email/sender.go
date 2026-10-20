@@ -11,15 +11,14 @@ import (
 	"time"
 )
 
-type EmailData struct {
-	To      string
-	Subject string
-	Body    string
+type emailData struct {
+	To          string
+	Subject     string
+	Body        string
+	ContentType string // "text/plain" or "text/html"; empty defaults to "text/plain"
 }
 
-type EmailSender func(ctx context.Context, data EmailData) error
-
-type SMTPSender struct {
+type sMTPSender struct {
 	host     string
 	port     int
 	user     string
@@ -33,8 +32,8 @@ type SMTPSender struct {
 	conn     net.Conn
 }
 
-func NewSMTPSender(host string, port int, user, pass, tlsMode, from string) EmailSender {
-	s := &SMTPSender{
+func NewSMTPSender(host string, port int, user, pass, tlsMode, from string) *sMTPSender {
+	s := &sMTPSender{
 		host:    host,
 		port:    port,
 		user:    user,
@@ -46,16 +45,16 @@ func NewSMTPSender(host string, port int, user, pass, tlsMode, from string) Emai
 		s.auth = smtp.PlainAuth("", user, pass, host)
 	}
 	s.initDialFunc()
-	return s.Send
+	return s
 }
 
-func (s *SMTPSender) Send(ctx context.Context, data EmailData) error {
+func (s *sMTPSender) send(ctx context.Context, data emailData) error {
 	if s.host == "" {
 		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	msg := composeMessage(s.from, data.To, data.Subject, data.Body)
+	msg := composeMessage(s.from, data.To, data.Subject, data.Body, data.ContentType)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,7 +71,7 @@ func (s *SMTPSender) Send(ctx context.Context, data EmailData) error {
 	return nil
 }
 
-func (s *SMTPSender) ensureConnection(addr string) error {
+func (s *sMTPSender) ensureConnection(addr string) error {
 	if s.client != nil {
 		return nil
 	}
@@ -101,7 +100,7 @@ func (s *SMTPSender) ensureConnection(addr string) error {
 	return nil
 }
 
-func (s *SMTPSender) sendEmail(to, msg string) error {
+func (s *sMTPSender) sendEmail(to, msg string) error {
 	if err := s.client.Mail(s.from); err != nil {
 		return err
 	}
@@ -122,7 +121,7 @@ func (s *SMTPSender) sendEmail(to, msg string) error {
 	return nil
 }
 
-func (s *SMTPSender) closeConnection() {
+func (s *sMTPSender) closeConnection() {
 	if s.client != nil {
 		s.client.Quit()
 		s.client = nil
@@ -133,7 +132,7 @@ func (s *SMTPSender) closeConnection() {
 	}
 }
 
-func (s *SMTPSender) initDialFunc() {
+func (s *sMTPSender) initDialFunc() {
 	switch s.tlsMode {
 	case "tls":
 		s.dialFunc = func(network, addr string) (net.Conn, error) {
@@ -163,13 +162,17 @@ func (s *SMTPSender) initDialFunc() {
 	}
 }
 
-func composeMessage(from, to, subject, body string) string {
+func composeMessage(from, to, subject, body, contentType string) string {
+	ct := contentType
+	if ct == "" {
+		ct = "text/plain"
+	}
 	var sb strings.Builder
 	sb.WriteString("From: " + from + "\r\n")
 	sb.WriteString("To: " + to + "\r\n")
 	sb.WriteString("Subject: " + subject + "\r\n")
 	sb.WriteString("MIME-Version: 1.0\r\n")
-	sb.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	sb.WriteString("Content-Type: " + ct + "; charset=\"utf-8\"\r\n")
 	sb.WriteString("\r\n")
 	sb.WriteString(body)
 	return sb.String()

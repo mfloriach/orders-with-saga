@@ -11,6 +11,7 @@ import (
 
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
+	"paymentgateway/internal/email"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/internal/payment"
 	"paymentgateway/internal/payment/repositories"
@@ -104,7 +105,9 @@ func Build(cfg config.Config) (*Container, error) {
 		),
 	)
 
-	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient))
+	emailSender := email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPTLS, cfg.SMTPFrom)
+
+	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient, emailSender))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil

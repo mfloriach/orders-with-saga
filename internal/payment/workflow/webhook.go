@@ -5,12 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
-	"uuid"
 
 	"paymentgateway/internal/domain"
-	"paymentgateway/internal/payment/repositories"
-	"paymentgateway/pkg/apiclient"
 )
 
 // MerchantLookup resolves a merchant by ID. *merchant.Repository satisfies it.
@@ -19,8 +15,7 @@ type MerchantLookup interface {
 }
 
 type webhook struct {
-	Client  *apiclient.Client
-	webhook repositories.MerchantWebhook
+	Payments domain.PaymentRepository
 }
 
 func (w webhook) Name() string { return "webhook" }
@@ -29,6 +24,11 @@ func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
 	p := wf.Captured
 	if p == nil {
 		return errors.New("payment is not captured")
+	}
+
+	// Merchant without webhook URL skips delivery — no outbox row is created.
+	if wf.Merchant.WebhookURL == nil || *wf.Merchant.WebhookURL == "" {
+		return nil
 	}
 
 	payload, err := json.Marshal(domain.MerchantPaymentSusccessfull{
@@ -40,24 +40,16 @@ func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
 		return fmt.Errorf("webhook: failed to marshal event: %w", err)
 	}
 
-	event := domain.MerchantEvent{
-		ID:        uuid.New().String(),
-		Type:      domain.MerchantEventTypeSuccessfullPayment,
-		Merchant:  *wf.Merchant,
-		Payload:   payload,
-		CreatedAt: time.Now(),
-	}
-
-	if err := w.webhook.Notify(ctx, event); err != nil {
-		return fmt.Errorf("email coul not be send with id: %s", event.ID)
+	if err := w.Payments.OutboxEvent(ctx, "payment", wf.Pending.ID, "payment.succeeded", payload); err != nil {
+		// Outbox write failure must not fail the payment — the payment is
+		// already captured and durable. Delivery is best-effort via the
+		// outbox worker (deferred).
+		return nil
 	}
 
 	return nil
 }
 
 func (w webhook) Compensate(ctx context.Context, wf *PaymentWorkflow) error {
-	if err := w.Do(ctx, wf); err != nil {
-		return err
-	}
 	return nil
 }

@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -77,7 +78,13 @@ func (r *PaymentDatabaseRepository) Authorized(ctx context.Context, p domain.Pay
 }
 
 func (r *PaymentDatabaseRepository) Captured(ctx context.Context, p domain.PaymentAuthenticated) (domain.PaymentCaptured, error) {
-	result, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.PaymentCaptured{}, fmt.Errorf("begin transaction for payment %q: %w", p.ID, err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'captured'
 		WHERE id = $1
@@ -94,6 +101,19 @@ func (r *PaymentDatabaseRepository) Captured(ctx context.Context, p domain.Payme
 
 	if rows == 0 {
 		return domain.PaymentCaptured{}, fmt.Errorf("payment %q not found or not authorized", p.ID)
+	}
+
+	payload, err := json.Marshal(map[string]any{"payment_id": p.ID, "status": "captured"})
+	if err != nil {
+		return domain.PaymentCaptured{}, fmt.Errorf("marshal outbox payload for payment %q: %w", p.ID, err)
+	}
+
+	if err := r.outboxEvent(ctx, tx, "payment", p.ID, "payment.captured", payload); err != nil {
+		return domain.PaymentCaptured{}, fmt.Errorf("write outbox event for payment %q: %w", p.ID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.PaymentCaptured{}, fmt.Errorf("commit transaction for payment %q: %w", p.ID, err)
 	}
 
 	return domain.PaymentCaptured{
@@ -145,4 +165,25 @@ func (r *PaymentDatabaseRepository) IsIdempotent(ctx context.Context, merchantID
 	}
 
 	return id, nil
+}
+
+// outboxExecer is satisfied by both *sql.DB and *sql.Tx so the same outbox
+// insert can run standalone or inside a transaction.
+type outboxExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (r *PaymentDatabaseRepository) outboxEvent(ctx context.Context, ex outboxExecer, aggregateType, aggregateID, eventType string, payload []byte) error {
+	_, err := ex.ExecContext(ctx, `
+		INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload)
+		VALUES ($1, $2, $3, $4)
+	`, aggregateType, aggregateID, eventType, payload)
+	return err
+}
+
+// OutboxEvent durably records one outbox event row. It is safe to call
+// outside a transaction; callers needing atomicity with a payment state
+// change should use the transaction-aware path (see Captured).
+func (r *PaymentDatabaseRepository) OutboxEvent(ctx context.Context, aggregateType, aggregateID, eventType string, payload []byte) error {
+	return r.outboxEvent(ctx, r.db, aggregateType, aggregateID, eventType, payload)
 }

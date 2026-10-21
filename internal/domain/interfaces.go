@@ -6,7 +6,7 @@ import (
 )
 
 type PaymentRepository interface {
-	FindByIdem(ctx context.Context, merchantID, key string) (*Payment, error)
+	FindByIdem(ctx context.Context, merchantID, key string) (*PaymentPending, error)
 	New(ctx context.Context, p *PaymentPending) error
 	Authorized(ctx context.Context, p PaymentPending, authorizationID string) (PaymentAuthenticated, error)
 	Captured(ctx context.Context, p PaymentAuthenticated) (PaymentCaptured, error)
@@ -50,6 +50,6 @@ func (e ErrorCardNetwork) Unwrap() error {
 	return e.Err
 }
 
-type ConflictError struct{ Existing *Payment }
+type ConflictError struct{ Existing *PaymentPending }
 
 func (e *ConflictError) Error() string { return "idempotency_conflict" }

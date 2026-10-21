@@ -14,15 +14,6 @@ type Price struct {
 	Coin   string `json:"coin" validate:"required,oneof=JPY USD EUR"`
 }
 
-type Payment struct {
-	ID             string    `json:"id"`
-	MerchantID     string    `json:"merchant_id"`
-	Price          Price     `json:"price"`
-	IdempotencyKey string    `json:"idempotency_key"`
-	Status         Status    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-}
-
 type PaymentPending struct {
 	ID             string    `json:"id"`
 	MerchantID     string    `json:"merchant_id"`
@@ -46,6 +37,12 @@ type PaymentCaptured struct {
 type PaymentFailed struct {
 	PaymentPending
 	Reason string
+}
+
+type PaymentRefund struct {
+	PaymentCaptured
+	Reason   string
+	RefundAt time.Time
 }
 
 // Status is the payment lifecycle state. A distinct type (not a bare

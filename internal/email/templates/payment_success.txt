@@ -5,6 +5,6 @@ Hello {{.MerchantName}},
 Your payment has been processed successfully.
 
 Payment ID: {{.PaymentID}}
-Amount: {{.Amount}}
+Amount: {{.Price.Amount}} {{.Price.Coin}}
 
 Thank you for your business.

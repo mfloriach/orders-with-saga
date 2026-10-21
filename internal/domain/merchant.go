@@ -26,6 +26,6 @@ type MerchantEvent struct {
 
 type MerchantPaymentSusccessfull struct {
 	PaymentID string
-	Amount    int64
+	Price     Price
 	ProductID string
 }

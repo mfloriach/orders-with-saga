@@ -123,23 +123,32 @@ components:
       type: object
       required:
         - merchant_id
-        - amount
+        - price
       properties:
         merchant_id:
           type: string
           format: uuid
           example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-        amount:
-          type: integer
-          minimum: 1
-          example: 2500
+        price:
+          type: object
+          required:
+            - amount
+            - coin
+          properties:
+            amount:
+              type: integer
+              minimum: 1
+              example: 2500
+            coin:
+              type: string
+              example: USD
       additionalProperties: false
     Payment:
       type: object
       required:
         - id
         - merchant_id
-        - amount
+        - price
         - idempotency_key
         - status
         - created_at
@@ -152,9 +161,18 @@ components:
           type: string
           format: uuid
           example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-        amount:
-          type: integer
-          example: 2500
+        price:
+          type: object
+          required:
+            - amount
+            - coin
+          properties:
+            amount:
+              type: integer
+              example: 2500
+            coin:
+              type: string
+              example: USD
         idempotency_key:
           type: string
           example: drv:abc123...

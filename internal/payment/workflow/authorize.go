@@ -20,7 +20,7 @@ func (a authorize) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return errors.New("payment is not pending")
 	}
 
-	authorizeId, err := a.CardNetwork.Authorize(ctx, p.ID, p.Amount, p.IdempotencyKey)
+	authorizeId, err := a.CardNetwork.Authorize(ctx, p.ID, p.Price.Amount, p.IdempotencyKey)
 	if err != nil {
 		a.Payments.Failed(ctx, p.ID, fmt.Errorf("payment: failed to authorize: %w", err))
 		return err

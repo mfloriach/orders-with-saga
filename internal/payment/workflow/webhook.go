@@ -33,7 +33,7 @@ func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
 
 	payload, err := json.Marshal(domain.MerchantPaymentSusccessfull{
 		PaymentID: wf.Pending.ID,
-		Amount:    wf.Pending.Amount,
+		Price:     wf.Pending.Price,
 		ProductID: "xxxx",
 	})
 	if err != nil {

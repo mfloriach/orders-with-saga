@@ -5,7 +5,7 @@ Hello {{.MerchantName}},
 A refund has been initiated and is currently being processed.
 
 Refund ID: {{.RefundID}}
-Amount: {{.Amount}}
+Amount: {{.Price.Amount}} {{.Price.Coin}}
 Reason: {{.RefundReason}}
 
 You will receive another email once the refund is complete.

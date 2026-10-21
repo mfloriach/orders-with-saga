@@ -20,14 +20,14 @@ type Handler struct{ svc creator }
 // The raw Idempotency-Key header is passed through; key resolution lives
 // in the service.
 type creator interface {
-	Create(ctx context.Context, merchantID string, amount int64, idemHeader string) (*domain.PaymentCaptured, error)
+	Create(ctx context.Context, merchantID string, price domain.Price, idemHeader string) (*domain.PaymentCaptured, error)
 }
 
 func NewHandler(svc creator) *Handler { return &Handler{svc} }
 
 type createBody struct {
-	MerchantID string `json:"merchant_id" validate:"required,uuid"`
-	Amount     int64  `json:"amount" validate:"gt=0"`
+	MerchantID string       `json:"merchant_id" validate:"required,uuid"`
+	Price      domain.Price `json:"price"`
 }
 
 // CreatePayment godoc
@@ -51,9 +51,9 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 		return apperr.ValidationFailed(errs)
 	}
 
-	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Amount, c.Get("Idempotency-Key"))
+	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Price, c.Get("Idempotency-Key"))
 	var (
-		ce *domain.ConflictError
+		ce  *domain.ConflictError
 		ecn *domain.ErrorCardNetwork
 		se  *saga.SagaError
 	)

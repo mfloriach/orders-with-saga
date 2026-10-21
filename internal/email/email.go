@@ -19,7 +19,7 @@ type PaymentSuccessfully struct {
 
 type RefundInProgress struct {
 	RefundID       string
-	Amount         int64
+	Price          domain.Price
 	MerchantName   string
 	RefundReason   string
 	User           domain.User
@@ -30,7 +30,7 @@ func (e *sMTPSender) SendPaymentSuccessfully(ctx context.Context, cnt PaymentSuc
 
 	body, err := render("payment_success.html", map[string]any{
 		"PaymentID":    cnt.Payment.ID,
-		"Amount":       cnt.Payment.Amount,
+		"Price":        cnt.Payment.Price,
 		"MerchantName": cnt.Merchant.Name,
 	})
 	if err != nil {
@@ -56,7 +56,7 @@ func (e *sMTPSender) SendRefundInProgress(ctx context.Context, cnt RefundInProgr
 
 	body, err := render("refund_in_progress.html", map[string]any{
 		"RefundID":      cnt.RefundID,
-		"Amount":        cnt.Amount,
+		"Price":         cnt.Price,
 		"MerchantName":  cnt.MerchantName,
 		"RefundReason":  cnt.RefundReason,
 	})

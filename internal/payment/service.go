@@ -35,7 +35,7 @@ func NewService(
 	}
 }
 
-func (s *Service) Create(ctx context.Context, merchantID string, amount int64, idemKey string) (*domain.PaymentCaptured, error) {
+func (s *Service) Create(ctx context.Context, merchantID string, price domain.Price, idemKey string) (*domain.PaymentCaptured, error) {
 	idemKey = resolveKey(idemKey)
 
 	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
@@ -50,7 +50,7 @@ func (s *Service) Create(ctx context.Context, merchantID string, amount int64, i
 		return nil, fmt.Errorf("payment: failed to check idempotency: %w", err)
 	}
 
-	pPending := &domain.PaymentPending{ID: uuid.New().String(), MerchantID: merchantID, Amount: amount, IdempotencyKey: idemKey}
+	pPending := &domain.PaymentPending{ID: uuid.New().String(), MerchantID: merchantID, Price: price, IdempotencyKey: idemKey}
 	wf := workflow.PaymentWorkflow{Pending: pPending}
 
 	if err := s.payments.New(ctx, pPending); err != nil {

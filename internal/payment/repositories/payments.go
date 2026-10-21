@@ -22,8 +22,8 @@ func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, 
 	var p domain.Payment
 	var status string
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, merchant_id, amount, idempotency_key, status, created_at FROM payments WHERE merchant_id=$1 AND idempotency_key=$2`,
-		merchantID, key).Scan(&p.ID, &p.MerchantID, &p.Amount, &p.IdempotencyKey, &status, &p.CreatedAt)
+		`SELECT id, merchant_id, amount, coin, idempotency_key, status, created_at FROM payments WHERE merchant_id=$1 AND idempotency_key=$2`,
+		merchantID, key).Scan(&p.ID, &p.MerchantID, &p.Price.Amount, &p.Price.Coin, &p.IdempotencyKey, &status, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -36,8 +36,8 @@ func (r *PaymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPe
 	p.Status = domain.StatusPending
 
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO payments (id, merchant_id, amount, idempotency_key, status) VALUES ($1,$2,$3,$4,$5)`,
-		p.ID, p.MerchantID, p.Amount, p.IdempotencyKey, p.Status)
+		`INSERT INTO payments (id, merchant_id, amount, coin, idempotency_key, status) VALUES ($1,$2,$3,$4,$5,$6)`,
+		p.ID, p.MerchantID, p.Price.Amount, p.Price.Coin, p.IdempotencyKey, p.Status)
 
 	if err != nil {
 		var pgErr *pgconn.PgError

@@ -7,15 +7,22 @@ Notifies customers asynchronously when their payment completes, without letting 
 ## Requirements
 
 ### Requirement: Email event published on payment success
-The system SHALL publish one email event carrying payment id and merchant id when payment creation succeeds.
+The system SHALL publish one email event to the outbox table carrying payment id and merchant id when payment creation succeeds, without blocking the response.
 
 #### Scenario: Success publishes event
 - **WHEN** payment creation completes with `201`
-- **THEN** one email event for that payment is published to the broker
+- **THEN** one outbox row exists with the payment id, event type payment.succeeded, and the email payload; the API returns `201`
 
 #### Scenario: Failed creation publishes nothing
 - **WHEN** payment creation fails for any reason
-- **THEN** no email event is published for that attempt
+- **THEN** no outbox row is created for that attempt
+
+### Requirement: Email delivery failure does not fail the payment
+The system SHALL leave the payment in `captured` status when an email outbox event cannot be processed, so delivery failures never mark a captured payment as failed.
+
+#### Scenario: Undeliverable email keeps payment captured
+- **WHEN** an outbox email event cannot be delivered to the customer
+- **THEN** the payment remains `captured` and the API returns `201`
 
 ### Requirement: Async email delivery
 The system SHALL deliver each email event from a background worker, independent of the payment response path, with bounded retries and dead-letter parking on exhaustion.

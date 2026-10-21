@@ -29,19 +29,26 @@ The system SHALL deliver each webhook event to the merchant's registered `webhoo
 - **THEN** the event is acknowledged with no HTTP call and no retry
 
 ### Requirement: Synchronous webhook call within payment creation
-The system SHALL call the merchant's registered `webhook_url` synchronously as a saga step during payment creation, blocking the response until the call completes.
+The system SHALL publish one webhook event to the outbox table as part of payment creation without blocking the response.
 
 #### Scenario: Webhook call succeeds
-- **WHEN** payment creation reaches the webhook step and the merchant's `webhook_url` returns `2xx`
-- **THEN** creation completes and the API returns `201`
+- **WHEN** payment creation completes with `201` and the merchant has a `webhook_url`
+- **THEN** one outbox row exists with the payment id, event type payment.succeeded, and the webhook payload; the API returns `201`
 
 #### Scenario: Webhook call fails compensates prior steps
-- **WHEN** the merchant's `webhook_url` returns non-2xx or the call fails within the retry budget
-- **THEN** the payment is marked `failed`, the API returns `500`, and prior saga steps are compensated in reverse order
+- **WHEN** an outbox webhook event cannot be written
+- **THEN** the payment remains `captured` and the API returns `201`; the failure does not trigger compensation
 
 #### Scenario: Merchant without webhook URL skips delivery
 - **WHEN** the merchant has no registered `webhook_url`
-- **THEN** no HTTP call is made and creation continues as if the webhook step succeeded
+- **THEN** no outbox row is created and creation continues as if the webhook step succeeded
+
+### Requirement: Webhook delivery failure does not fail the payment
+The system SHALL leave the payment in `captured` status when a webhook outbox event cannot be processed, so delivery failures never mark a captured payment as failed.
+
+#### Scenario: Undeliverable webhook keeps payment captured
+- **WHEN** an outbox webhook event cannot be delivered to the merchant endpoint
+- **THEN** the payment remains `captured` and the API returns `201`
 
 ### Requirement: Bounded retries with dead-letter parking
 The system SHALL retry failed webhook deliveries with backoff up to a bounded attempt count, then park the event in a dead-letter queue and surface it in logs.

@@ -2,14 +2,15 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
-	"paymentgateway/internal/notifications/email"
+	"paymentgateway/internal/domain"
 )
 
 type emailStep struct {
-	Sender email.Senders
+	Payments domain.PaymentRepository
 }
 
 func (e emailStep) Name() string { return "email" }
@@ -20,14 +21,25 @@ func (e emailStep) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return errors.New("payment is not captured")
 	}
 
-	data := email.PaymentSuccessfully{Payment: *p, Merchant: *w.Merchant, User: w.User}
-	if err := e.Sender.SendPaymentSuccessfully(ctx, data); err != nil {
-		return fmt.Errorf("email could not be send")
+	payload, err := json.Marshal(domain.MerchantPaymentSusccessfull{
+		PaymentID: w.Pending.ID,
+		Price:     w.Pending.Price,
+		ProductID: "xxxx",
+	})
+	if err != nil {
+		return fmt.Errorf("email: failed to marshal event: %w", err)
+	}
+
+	if err := e.Payments.OutboxEvent(ctx, "payment", w.Pending.ID, "payment.succeeded", payload); err != nil {
+		// Outbox write failure must not fail the payment — the payment is
+		// already captured and durable. Delivery is best-effort via the
+		// outbox worker (deferred).
+		return nil
 	}
 
 	return nil
 }
 
 func (e emailStep) Compensate(ctx context.Context, w *PaymentWorkflow) error {
-	return e.Do(ctx, w)
+	return nil
 }

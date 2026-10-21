@@ -63,12 +63,8 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	case errors.Is(err, domain.ErrConflict):
 		return apperr.IdempotencyConflict("")
 	case errors.As(err, &ce):
-		id := ""
-		if ce.Existing != nil {
-			id = ce.Existing.ID
-			c.Set("Idempotency-Key", ce.Existing.IdempotencyKey)
-		}
-		return apperr.IdempotencyConflict(id)
+		c.Set("Idempotency-Key", ce.IdempotentKey)
+		return apperr.IdempotencyConflict(ce.PaymentId)
 	case errors.As(err, &ecn):
 		return apperr.BadGateway()
 	case errors.As(err, &se):

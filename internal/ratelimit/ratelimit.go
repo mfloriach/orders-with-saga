@@ -1,7 +1,6 @@
 package ratelimit
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -15,7 +14,7 @@ import (
 func Middleware(rdb *redis.Client, limit int, window time.Duration) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		key := fmt.Sprintf("rl:%s", c.IP())
-		ctx := context.Background()
+		ctx := c.Context()
 		n, err := rdb.Incr(ctx, key).Result()
 		if err != nil {
 			return c.Next() // fail open if redis down

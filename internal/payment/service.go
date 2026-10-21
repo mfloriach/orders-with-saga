@@ -42,9 +42,12 @@ func (s *Service) Create(ctx context.Context, merchantID string, price domain.Pr
 		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
 	}
 
-	existing, err := s.payments.FindByIdem(ctx, merchantID, idemKey)
-	if existing != nil {
-		return nil, &domain.ConflictError{Existing: existing}
+	paymentID, err := s.payments.IsIdempotent(ctx, merchantID, idemKey)
+	if paymentID != "" {
+		return nil, &domain.ConflictError{
+			PaymentId:     paymentID,
+			IdempotentKey: idemKey,
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("payment: failed to check idempotency: %w", err)

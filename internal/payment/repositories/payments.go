@@ -13,28 +13,29 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+type payment struct {
+	ID                string
+	MerchantID        string
+	Amount            int64
+	Coin              string
+	IdempotencyKey    string
+	Status            domain.PaymentStatus
+	CreatedAt         time.Time
+	AuthenticationKey string
+	PaidAt            time.Time
+	Reason            string
+	RefundAt          time.Time
+}
+
 type PaymentDatabaseRepository struct{ db *sql.DB }
 
 func NewPaymentDatabaseRepository(db *sql.DB) *PaymentDatabaseRepository {
 	return &PaymentDatabaseRepository{db}
 }
 
-func (r *PaymentDatabaseRepository) FindByIdem(ctx context.Context, merchantID, key string) (*domain.PaymentPending, error) {
-	var p domain.PaymentPending
-	var status string
-	err := r.db.QueryRowContext(ctx,
-		`SELECT id, merchant_id, amount, coin, idempotency_key, status, created_at FROM payments WHERE merchant_id=$1 AND idempotency_key=$2`,
-		merchantID, key).Scan(&p.ID, &p.MerchantID, &p.Price.Amount, &p.Price.Coin, &p.IdempotencyKey, &status, &p.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	p.Status = domain.Status(status)
-	return &p, err
-}
-
 func (r *PaymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPending) error {
 	p.ID = uuid.NewString()
-	p.Status = domain.StatusPending
+	p.Status = domain.PaymentStatusPending
 
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO payments (id, merchant_id, amount, coin, idempotency_key, status) VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -72,7 +73,7 @@ func (r *PaymentDatabaseRepository) Authorized(ctx context.Context, p domain.Pay
 		return domain.PaymentAuthenticated{}, fmt.Errorf("payment %q not found or not pending", p.ID)
 	}
 
-	return domain.PaymentAuthenticated{PaymentPending: p}, nil
+	return domain.PaymentAuthenticated{PaymentPending: p, AuthenticationKey: authorizationID}, nil
 }
 
 func (r *PaymentDatabaseRepository) Captured(ctx context.Context, p domain.PaymentAuthenticated) (domain.PaymentCaptured, error) {
@@ -95,10 +96,8 @@ func (r *PaymentDatabaseRepository) Captured(ctx context.Context, p domain.Payme
 		return domain.PaymentCaptured{}, fmt.Errorf("payment %q not found or not authorized", p.ID)
 	}
 
-	authKey := p.AuthenticationKey
 	return domain.PaymentCaptured{
 		PaymentAuthenticated: p,
-		AuthenticationKey:    &authKey,
 		PaidAt:               time.Now(),
 	}, nil
 }
@@ -126,4 +125,24 @@ func (r *PaymentDatabaseRepository) Failed(ctx context.Context, paymentId string
 	return domain.PaymentFailed{
 		Reason: err.Error(),
 	}, nil
+}
+
+func (r *PaymentDatabaseRepository) IsIdempotent(ctx context.Context, merchantID, key string) (string, error) {
+	var id string
+
+	err := r.db.QueryRowContext(ctx, `
+        SELECT id
+        FROM payments
+        WHERE merchant_id = $1
+          AND idempotency_key = $2
+    `, merchantID, key).Scan(&id)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check payment idempotency: %w", err)
+	}
+
+	return id, nil
 }

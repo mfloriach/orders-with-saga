@@ -11,8 +11,8 @@ import (
 
 	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
-	"paymentgateway/internal/email"
 	"paymentgateway/internal/merchant"
+	"paymentgateway/internal/notifications/email"
 	"paymentgateway/internal/payment"
 	"paymentgateway/internal/payment/repositories"
 	"paymentgateway/internal/payment/workflow"

@@ -15,12 +15,12 @@ type Price struct {
 }
 
 type PaymentPending struct {
-	ID             string    `json:"id"`
-	MerchantID     string    `json:"merchant_id"`
-	Price          Price     `json:"price"`
-	IdempotencyKey string    `json:"idempotency_key"`
-	Status         Status    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string        `json:"id"`
+	MerchantID     string        `json:"merchant_id"`
+	Price          Price         `json:"price"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	Status         PaymentStatus `json:"status"`
+	CreatedAt      time.Time     `json:"created_at"`
 }
 
 type PaymentAuthenticated struct {
@@ -30,8 +30,7 @@ type PaymentAuthenticated struct {
 
 type PaymentCaptured struct {
 	PaymentAuthenticated
-	AuthenticationKey *string
-	PaidAt            time.Time
+	PaidAt time.Time
 }
 
 type PaymentFailed struct {
@@ -49,13 +48,14 @@ type PaymentRefund struct {
 // string) so only declared statuses compile — an undeclared value cannot
 // reach TransitionTo or the store by accident. The database CHECK
 // constraint mirrors this vocabulary; extend both together.
-type Status string
+type PaymentStatus string
 
 // Payment statuses. The database CHECK constraint mirrors this vocabulary;
 // extend both together.
 const (
-	StatusPending    Status = "pending"
-	StatusAuthorized Status = "authorized"
-	StatusCaptured   Status = "captured"
-	StatusFailed     Status = "failed"
+	PaymentStatusPending    PaymentStatus = "pending"
+	PaymentStatusAuthorized PaymentStatus = "authorized"
+	PaymentStatusCaptured   PaymentStatus = "captured"
+	PaymentStatusFailed     PaymentStatus = "failed"
+	PaymentStatusRefunded   PaymentStatus = "refunded"
 )

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"paymentgateway/internal/email"
+	"paymentgateway/internal/notifications/email"
 )
 
 type emailStep struct {

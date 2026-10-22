@@ -136,7 +136,15 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 }
 ```
 
-**Struct tags are parsed literally.** `validate:"gte=0, lte=100"` (space after the comma) is not two rules: the validator reads a function named ` lte` and **panics** at request time. Write `validate:"gte=0,lte=100"` — no spaces after commas. Keep the tag set, the code's defaults/clamps, the OpenAPI bounds, and the tests saying the same numbers; four places that disagree are four different contracts.
+**Struct tags are parsed literally.** `validate:"gte=0, lte=100"` (space after the comma) is not two rules: the validator reads a function named ` lte` and **panics** at request time. Write `validate:"gte=0,lte=100"` — no spaces after commas. Keep the tag set, the code's defaults, the OpenAPI bounds, and the tests saying the same numbers; four places that disagree are four different contracts.
+
+**Every numeric input needs both bounds.** Every request field of type `int`, `int64`, `float64`, or another numeric type must carry a lower and an upper validator: `validate:"gte=1,lte=100"`. A lone `gte` or `lte` is an incomplete contract. Optional numeric fields keep both bounds behind `omitempty` (`validate:"omitempty,gte=1,lte=1000"`). The only exception is an explicit range pair such as `amount_gte` / `amount_lte`: each half is one-sided by definition, and the pair is validated together (`amount_gte <= amount_lte`). Mirror every bound in OpenAPI with `minimum` and `maximum`, and test both edges.
+
+**Every string input needs both length bounds.** A free-form string request field carries `min` and `max` (`validate:"required,min=1,max=200"`). Optional strings keep both bounds behind `omitempty` (`validate:"omitempty,min=1,max=2000"`). Structured strings still need length bounds around their format rule (`required,email,min=3,max=320`), and enum strings still need `max` plus `oneof`. Mirror the lengths in OpenAPI with `minLength` and `maxLength`.
+
+**Identifiers need a format, not just a length.** A client-supplied ID is a string with a known representation. Validate it with `uuid` when it is a UUID, alongside the length bounds that representation implies (`min=36,max=36` for canonical hyphenated UUIDs; use 32–36 only if you intentionally accept both forms). If you cannot determine whether the ID is a UUID or which representation clients send, stop and ask before inventing a validator.
+
+**Audit `omitempty` for double validation.** `omitempty` on a pointer skips only a nil pointer; a non-nil pointer to `""` still reaches `min`, `email`, `http_url`, or `oneof` and may fail unexpectedly. Pairing `omitempty` with `min=1` is often two rules fighting over the same value. Decide first whether empty means absent, invalid, or a valid clear signal, then express exactly one of those meanings in the tags or an explicit branch.
 
 Validation belongs in:
 
@@ -159,7 +167,7 @@ Extend contracts without breaking consumers. In Go, JSON tags and exported field
 ```go
 // Good: a new optional field. A pointer distinguishes "absent" from the zero value.
 type createBody struct {
-	MerchantID string `json:"merchant_id" validate:"required,uuid"`
+	MerchantID string `json:"merchant_id" validate:"required,uuid,min=36,max=36"`
 	Price      Price  `json:"price"`
 	Capture    *bool  `json:"capture,omitempty" validate:"omitempty"` // added later
 }
@@ -331,7 +339,7 @@ The unexported method seals the set to this package; a new variant is a compile-
 ```go
 // Input: exactly what the caller may send. Unexported and handler-local.
 type createBody struct {
-	MerchantID string       `json:"merchant_id" validate:"required,uuid"`
+	MerchantID string       `json:"merchant_id" validate:"required,uuid,min=36,max=36"`
 	Price      domain.Price `json:"price"`
 }
 
@@ -421,9 +429,9 @@ canonical layout is:
 3. the consumer-side service interface
 4. request bodies and param/query structs
 5. response envelopes and shared DTOs
-6. helpers used by the handlers
-7. `Handler` and `NewHandler`
-8. handler methods, in the same order the routes are registered
+6. `Handler` and `NewHandler`
+7. handler methods, in the same order the routes are registered
+8. helper functions, at the very end of the file
 
 ```go
 const (
@@ -436,7 +444,7 @@ const (
 type merchantService interface {
 	Register(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error)
 	Get(ctx context.Context, id string) (*domain.Merchant, error)
-	List(ctx context.Context, limit, offset int) ([]domain.Merchant, int, error)
+	List(ctx context.Context, limit, offset int, orderBy, order string) ([]domain.Merchant, int, error)
 	Update(ctx context.Context, id string, name, email, webhook *string) (*domain.Merchant, error)
 	Delete(ctx context.Context, id string) error
 }
@@ -451,20 +459,20 @@ type listQuery struct{ ... }
 type Pagination struct{ ... }
 type ListResponse[T any] struct{ ... }
 
-// 4. Helpers
-func merchantID(c *fiber.Ctx) (string, error) { ... }
-
-// 5. Handler and constructor
+// 4. Handler and constructor
 type Handler struct{ svc merchantService }
 
 func NewHandler(svc merchantService) *Handler { return &Handler{svc} }
 
-// 6. Methods, matching the route table order
+// 5. Methods, matching the route table order
 func (h *Handler) Create(c *fiber.Ctx) error { ... }
 func (h *Handler) List(c *fiber.Ctx) error   { ... }
 func (h *Handler) Get(c *fiber.Ctx) error    { ... }
 func (h *Handler) Update(c *fiber.Ctx) error { ... }
 func (h *Handler) Delete(c *fiber.Ctx) error { ... }
+
+// 6. Helpers, at the end of the file
+func merchantID(c *fiber.Ctx) (string, error) { ... }
 ```
 
 Why this order:
@@ -472,7 +480,7 @@ Why this order:
 - Types are defined before the code that references them, so a reviewer reads
   the contract first and the behaviour second.
 - `Handler` and its constructor sit next to the methods they own, not above the
-  request types.
+  request types. Helper functions come last, after the handler behaviour.
 - One method order — mirrored in `server.go` — makes route/handler drift obvious
   in review. If `server.go` registers `List` before `Get`, the file declares
   `List` before `Get`.
@@ -491,13 +499,15 @@ cosmetic bug.
 
 ### Pagination
 
-Every list endpoint accepts `page` + `limit` and returns the same envelope. Parse, default, clamp, then validate in the handler:
+Every list endpoint accepts `page`, `limit`, `order_by`, and `order`, and returns the same envelope. Parse, default, then validate in the handler:
 
 ```go
 type listQuery struct {
-	Page      int    `query:"page"  validate:"gte=1"`
-	Limit     int    `query:"limit" validate:"gte=1"`
-	Status    string `query:"status" validate:"omitempty,oneof=pending authorized captured failed refunded"`
+	Page      int    `query:"page"     validate:"gte=1,lte=100"`
+	Limit     int    `query:"limit"    validate:"gte=1,lte=50"`
+	Status    string `query:"status"   validate:"omitempty,oneof=pending authorized captured failed refunded,min=1,max=20"`
+	OrderBy   string `query:"order_by" validate:"omitempty,oneof=created_at name,min=1,max=32"`
+	Order     string `query:"order"    validate:"omitempty,oneof=asc desc,min=3,max=4"`
 	AmountGte *int64 `query:"amount_gte" validate:"omitempty,gte=0"`
 	AmountLte *int64 `query:"amount_lte" validate:"omitempty,gte=0"`
 }
@@ -508,15 +518,18 @@ var q listQuery
 if err := c.QueryParser(&q); err != nil {
 	return apperr.ValidationFailed(map[string]string{"query": "malformed query string"})
 }
-// Defaults first: an absent page/limit parses as zero, so validate afterwards.
+// Defaults first: an absent page/limit/order parses as zero, so validate afterwards.
 if q.Page == 0 {
 	q.Page = 1
 }
 if q.Limit == 0 {
 	q.Limit = 20
 }
-if q.Limit > 100 {
-	q.Limit = 100
+if q.OrderBy == "" {
+	q.OrderBy = "created_at"
+}
+if q.Order == "" {
+	q.Order = "desc"
 }
 if errs := validate.Struct(q); errs != nil {
 	return apperr.ValidationFailed(errs)
@@ -528,9 +541,15 @@ if q.AmountGte != nil && q.AmountLte != nil && *q.AmountGte > *q.AmountLte {
 
 - **`page` defaults to 1, never 0.** With `offset = (page-1)*limit`, a zero
   default becomes a negative `OFFSET`, which PostgreSQL rejects.
-- **Don't tag `limit` with `lte=100` if the contract says oversized limits are
-  clamped.** The tag rejects the request before the clamp runs. Pick reject or
-  clamp, then make the OpenAPI description and tests say the same thing.
+- **Bound, don't silently mutate.** Numeric request fields carry both `gte` and
+  `lte`; values outside the range are rejected with 400. Do not also clamp: an
+  `lte` bound and a clamp cannot both define the contract. If a product decision
+  later changes to clamping, remove `lte` and update the OpenAPI description and
+  tests in the same change.
+- **Ordering is part of the contract.** Every list endpoint accepts `order_by`
+  (an allowlisted column) and `order` (`asc`/`desc`), defaults both, and passes
+  them to the service. Never interpolate client text into `ORDER BY`: whitelist
+  values with `oneof` and map them to known columns.
 - **Initialize an empty page to `[]T{}`** (`if items == nil { items = []T{} }`)
   so JSON is `[]`, not `null`.
 
@@ -555,17 +574,17 @@ type Pagination struct {
 }
 ```
 
-Defaults and clamping are input normalization — handler work, not service work. The service owns filtering semantics and total counts.
+Defaults are input normalization (handler work); ranges are validation (also handler work). The service owns filtering semantics and total counts.
 
 ### Filtering
 
-snake_case query params, explicit ranges for anything ordered:
+snake_case query params, explicit ranges for anything ordered, and explicit ordering:
 
 ```
-GET /payments?status=captured&merchant_id=m-123&amount_gte=100&amount_lte=5000
+GET /payments?status=captured&merchant_id=m-123&amount_gte=100&amount_lte=5000&order_by=created_at&order=desc
 ```
 
-Use pointers for optional numeric ranges so "absent" is distinguishable from zero. Reject inverted ranges (`gte > lte`) as a validation error.
+Use pointers for optional numeric ranges so "absent" is distinguishable from zero. Reject inverted ranges (`gte > lte`) as a validation error. `order_by` must be an allowlisted column and `order` must be `asc` or `desc`; map them to SQL identifiers in code rather than concatenating client input.
 
 ### Partial Updates (PATCH)
 
@@ -573,10 +592,11 @@ Accept a partial body; pointer fields distinguish "not provided" from "set to ze
 
 ```go
 type updateBody struct {
-	WebhookURL *string `json:"webhook_url" validate:"omitempty,http_url,max=2000"`
+	Name *string `json:"name" validate:"omitempty,min=1,max=200"`
 }
 
 // Only fields whose pointer is non-nil are written; everything else is preserved.
+// Audit omitempty before adding it: on a pointer it skips nil, not "".
 ```
 
 An empty PATCH body changes nothing and returns the current resource. PUT (full replacement) is only appropriate when the client truly owns every field.
@@ -604,6 +624,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 
 - `internal/app/docs.go` serves `api/openapi.yaml` at `GET /openapi.yaml` and Scalar at `GET /docs`. Reuse `openAPIHandler` and `docsHandler`; do not add a second spec file or Swagger UI.
 - Every new route and every changed request/response type updates `api/openapi.yaml` in the same commit: path, schema, required list, enum, status codes, and error responses.
+- List query parameters document `page`, `limit`, `order_by`, and `order`; their `minimum`/`maximum`/`enum` values match the validator tags. String schemas carry `minLength`/`maxLength`, and ID fields carry `format: uuid` when applicable.
 - CI must fail if a route registered in `internal/app/server.go` has no corresponding path entry, or if the YAML no longer parses. A small Go test that parses the spec and walks the route table is enough.
 - Eyeball new endpoints in `/docs` before merge.
 
@@ -622,7 +643,7 @@ resp, err := app.Test(req)
 // assert status, body["code"], and — for validation — the field keys under fields["errors"]
 ```
 
-One row per case: malformed JSON, validation failure, service not-found, service conflict, upstream failure, success. List endpoints additionally cover default `page`/`limit`, clamped `limit`, inverted ranges, and the pagination envelope. Assert on the public contract (status, `code`, JSON field names), not internal error strings.
+One row per case: malformed JSON, validation failure, service not-found, service conflict, upstream failure, success. Validation cases cover both edges of every numeric and string bound, malformed IDs, and `omitempty` behaviour. List endpoints additionally cover default `page`/`limit`, both lower and upper limits, `order_by`/`order`, inverted ranges, and the pagination envelope. Assert on the public contract (status, `code`, JSON field names), not internal error strings.
 
 ## Common Rationalizations
 
@@ -639,6 +660,11 @@ One row per case: malformed JSON, validation failure, service not-found, service
 | "We compare the error string, it's quicker" | Error text is not a contract. Use `errors.Is`/`errors.As`; strings change silently. |
 | "Wrapping with `%w` is enough" | The handler must map the error to an `apperr` constructor. An unmapped error becomes a 500 with leaked detail risk. |
 | "Validation in the service is fine" | The service is called by trusted code too. Validate at the edge; keep internals trusting types. |
+| "`gte` is enough for a count, limit, or amount" | A lone lower bound accepts absurd values and leaves clients guessing the ceiling. Add `lte`, mirror it in OpenAPI, and test both edges. |
+| "A string only needs a max length" | A lone `max` accepts empty and one-character values where the domain requires substance. Add `min`, mirror it in OpenAPI, and test both edges. |
+| "Any non-empty string is a valid ID" | An ID has a representation. Validate UUIDs with `uuid`; if the format is unknown, ask instead of guessing. |
+| "`omitempty` makes a field optional" | On a pointer it skips only nil. A non-nil pointer to `""` still runs the other validators and can fail twice over. Decide what empty means first. |
+| "Sorting is an implementation detail" | `order_by` and `order` are public contract. Allowlist columns with `oneof`, map them to SQL in code, and never concatenate client input. |
 | "Accepting the Idempotency-Key header is enough" | The header is the contract; claiming the key atomically is the implementation. A key you accept but don't honour tells the client retrying is safe when it isn't. |
 | "Our queue guarantees exactly-once delivery" | No queue does across a consumer crash — the ack and your side effect are not one transaction. Design for at-least-once with idempotent processing. |
 | "Duplicate requests are rare" | They're *correlated*. Retries spike exactly when a dependency is degraded — the moment duplicates are most likely and most expensive. |
@@ -656,18 +682,24 @@ One row per case: malformed JSON, validation failure, service not-found, service
 - `err.Error()` or SQL text reaching the client
 - Errors matched with `strings.Contains` or `==` on the message
 - Missing `validate` tags on a body or query struct
-- List endpoints without `page`/`limit`, or a `limit` that isn't clamped
+- A string request field missing `min` or `max`, or an ID string missing its `uuid`/format validator
+- A numeric request field (`int`, `int64`, `float64`, ...) with only one bound — `gte` without `lte`, or the reverse — outside an explicit paired range filter
+- `omitempty` stacked with a validator that rejects the empty value, so the field is validated twice with contradictory meanings
+- List endpoints without `page`/`limit`, or a `limit` without both lower and upper bounds
+- List endpoints without `order_by` and `order`, or an unallowlisted `order_by` that reaches SQL
+- Numeric or string OpenAPI fields missing `minimum`/`maximum` or `minLength`/`maxLength`, or bounds that disagree with the validator tags
 - PATCH fields that aren't pointers, so "absent" overwrites with zero
 - Request bodies bound directly into a domain type with server-owned fields
 - JSON tags renamed/removed, or field types changed in place
 - `any`/`interface{}` in a domain contract
 - A wide interface declared next to its implementation instead of a narrow one at the consumer
 - `Handler` declared above the request/response types, or helpers and methods interleaved with type declarations
+- Helper functions declared before the `Handler` type or interleaved with handler methods instead of at the end of the file
 - Handler methods in a different order than the routes in `server.go`
 - Handler-local constants exported in SCREAMING_SNAKE (`DEFAULT_PAGE`) instead of `defaultPage`
 - `defaultPage = 0` (or any default that makes `(page-1)*limit` negative)
 - A space after the comma in a `validate` tag (`"gte=1, lte=100"`) — the validator panics on ` lte`
-- A pagination bound in the tag that contradicts the OpenAPI maximum or the clamp in the handler
+- A pagination bound in the tag that contradicts the OpenAPI maximum, or an `lte` bound combined with a clamp in the handler
 - A renamed response type whose doc comment, swag annotation, or OpenAPI schema still uses the old name
 - An empty list response serializing as `null` because the nil slice was not normalized to `[]T{}`
 
@@ -695,15 +727,19 @@ After designing or changing an API:
 - [ ] Error responses follow the single `apperr` envelope with stable `code`/`title`
 - [ ] Service errors are mapped with `errors.Is`/`errors.As`, catch-all last; nothing leaks
 - [ ] Validation happens at boundaries only; internals trust typed values
-- [ ] List endpoints support `page`/`limit`, clamp the limit, and reject inverted ranges
+- [ ] Every numeric request field has both lower and upper validator bounds; explicit range pairs validate `gte <= lte`
+- [ ] Every string request field has both `min` and `max`; IDs carry `uuid` or another determined format validator
+- [ ] `omitempty` usage has been audited: empty is deliberately absent, invalid, or a clear signal — not contradictory
+- [ ] List endpoints support `page`/`limit` with both bounds and `order_by`/`order` with allowlisted values
+- [ ] OpenAPI numeric and string bounds (`minimum`/`maximum`, `minLength`/`maxLength`) match the validator tags
 - [ ] New fields are additive and optional (pointer or `omitempty`), JSON tags unchanged
 - [ ] Naming follows Go/JSON/query conventions consistently across all endpoints
 - [ ] Handler depends on a narrow consumer-side interface; tests stub it
 - [ ] Table tests cover validation, error mapping, and success through `app.Test`
-- [ ] Handler file follows the canonical declaration order (constants → interface → request/response types → helpers → Handler → methods)
+- [ ] Handler file follows the canonical declaration order (constants → interface → request/response types → `Handler` → methods → helpers at the end)
 - [ ] Handler methods appear in the same order as the routes in `server.go`
 - [ ] Handler-local constants are unexported and `defaultPage` is 1
-- [ ] `validate` tags contain no spaces after commas; defaults, clamps, OpenAPI bounds, and tests agree
+- [ ] `validate` tags contain no spaces after commas; defaults, bounds, OpenAPI `minimum`/`maximum`/`minLength`/`maxLength`, and tests agree
 - [ ] Renamed types have no stale comment, annotation, alias, or OpenAPI name
 - [ ] Empty list responses serialize as `[]`, not `null`
 - [ ] State-changing endpoints either honour an idempotency key or are documented as unsafe to retry

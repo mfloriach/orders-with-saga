@@ -28,5 +28,5 @@ func NewWorkflow(
 	webhookStep := webhook{Client: client}
 	emailStep := emailStep{Sender: emailSender}
 
-	return saga.New(authorize, capture, webhookStep, emailStep)
+	return saga.New([]saga.Step[PaymentWorkflow]{authorize, capture, webhookStep, emailStep})
 }

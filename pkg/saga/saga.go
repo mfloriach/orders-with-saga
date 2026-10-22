@@ -17,7 +17,7 @@ type Saga[T any] struct {
 	compensationTimeout time.Duration
 }
 
-func New[T any](steps ...Step[T]) *Saga[T] {
+func New[T any](steps []Step[T]) *Saga[T] {
 	return &Saga[T]{
 		steps:               steps,
 		compensationTimeout: 10 * time.Second,

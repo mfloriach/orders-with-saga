@@ -49,7 +49,7 @@ func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
 	}
 
 	if err := w.webhook.Notify(ctx, event); err != nil {
-		return fmt.Errorf("email coul not be send with id: %s", event.ID)
+		return fmt.Errorf("webhook: failed to notify merchant with event %s: %w", event.ID, err)
 	}
 
 	return nil

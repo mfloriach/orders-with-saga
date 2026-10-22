@@ -22,7 +22,7 @@ func (e emailStep) Do(ctx context.Context, w *PaymentWorkflow) error {
 
 	data := email.PaymentSuccessfully{Payment: *p, Merchant: *w.Merchant, User: w.User}
 	if err := e.Sender.SendPaymentSuccessfully(ctx, data); err != nil {
-		return fmt.Errorf("email could not be send")
+		return fmt.Errorf("email: failed to send payment success: %w", err)
 	}
 
 	return nil

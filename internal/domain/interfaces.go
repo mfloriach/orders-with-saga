@@ -11,7 +11,6 @@ type PaymentRepository interface {
 	Authorized(ctx context.Context, p PaymentPending, authorizationID string) (PaymentAuthenticated, error)
 	Captured(ctx context.Context, p PaymentAuthenticated) (PaymentCaptured, error)
 	Failed(ctx context.Context, paymentId string, err error) (PaymentFailed, error)
-	OutboxEvent(ctx context.Context, aggregateType, aggregateID, eventType string, payload []byte) error
 }
 
 type NetworkStatus string

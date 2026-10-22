@@ -1,21 +1,10 @@
-package v2
+package saga
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
+	"uuid"
 )
-
-type SagaError struct {
-	Step    string
-	Err     error
-	Details string
-}
-
-func (s SagaError) Error() string {
-	return fmt.Sprintf("saga error: %v, %v, %v", s.Step, s.Err, s.Details)
-}
 
 type Step[T any] interface {
 	Name() string
@@ -36,11 +25,13 @@ func New[T any](steps ...Step[T]) *Saga[T] {
 }
 
 func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
+	id := uuid.NewV7()
 	completed := make([]Step[T], 0, len(s.steps))
 
 	for _, step := range s.steps {
 		if err := ctx.Err(); err != nil {
 			return SagaError{
+				ID:      id,
 				Step:    step.Name(),
 				Err:     ctx.Err(),
 				Details: "timeout",
@@ -49,6 +40,7 @@ func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
 
 		if err := step.Do(ctx, w); err != nil {
 			return SagaError{
+				ID:      id,
 				Step:    step.Name(),
 				Err:     err,
 				Details: "step failed",
@@ -61,38 +53,30 @@ func (s *Saga[T]) Execute(ctx context.Context, w *T) error {
 	return nil
 }
 
-func (s *Saga[T]) Reconsilate(
-	ctx context.Context,
-	w *T,
-	completed []Step[T],
-	cause error,
-) error {
-	// Compensation must still run if the original context was canceled.
-	ctx = context.WithoutCancel(ctx)
+func (s *Saga[T]) Reconsilate(ctx context.Context, id uuid.UUID) error {
+	// for i := len(completed) - 1; i >= 0; i-- {
+	// 	step := completed[i]
 
-	for i := len(completed) - 1; i >= 0; i-- {
-		step := completed[i]
+	// 	timeout := s.compensationTimeout
+	// 	if timeout <= 0 {
+	// 		timeout = 10 * time.Second
+	// 	}
 
-		timeout := s.compensationTimeout
-		if timeout <= 0 {
-			timeout = 10 * time.Second
-		}
+	// 	compCtx, cancel := context.WithTimeout(ctx, timeout)
+	// 	err := step.Compensate(compCtx, w)
+	// 	cancel()
 
-		compCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := step.Compensate(compCtx, w)
-		cancel()
+	// 	if err != nil {
+	// 		cause = errors.Join(
+	// 			cause,
+	// 			fmt.Errorf(
+	// 				"compensating step %q failed: %w",
+	// 				step.Name(),
+	// 				err,
+	// 			),
+	// 		)
+	// 	}
+	// }
 
-		if err != nil {
-			cause = errors.Join(
-				cause,
-				fmt.Errorf(
-					"compensating step %q failed: %w",
-					step.Name(),
-					err,
-				),
-			)
-		}
-	}
-
-	return cause
+	return nil
 }

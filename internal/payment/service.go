@@ -8,7 +8,7 @@ import (
 	"paymentgateway/internal/payment/workflow"
 	"paymentgateway/pkg/idempotency"
 
-	saga "paymentgateway/pkg/saga/v2"
+	saga "paymentgateway/pkg/saga"
 
 	"github.com/google/uuid"
 )

@@ -4,7 +4,7 @@ import (
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/notifications/email"
 	"paymentgateway/pkg/apiclient"
-	saga "paymentgateway/pkg/saga/v2"
+	saga "paymentgateway/pkg/saga"
 )
 
 type PaymentWorkflow struct {

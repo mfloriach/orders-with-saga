@@ -8,7 +8,7 @@ import (
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/merchant"
 	"paymentgateway/pkg/apperr"
-	saga "paymentgateway/pkg/saga/v2"
+	saga "paymentgateway/pkg/saga"
 	"paymentgateway/pkg/validate"
 
 	"github.com/gofiber/fiber/v2"

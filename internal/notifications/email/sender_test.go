@@ -19,8 +19,8 @@ func TestTemplatesParseAndRender(t *testing.T) {
 			path:   "templates/payment_success.html",
 			isHTML: true,
 			data: map[string]string{
-				"PaymentID":   "pay-123",
-				"Amount":      "$10.00",
+				"PaymentID":    "pay-123",
+				"Amount":       "$10.00",
 				"MerchantName": "Acme Corp",
 			},
 		},
@@ -29,8 +29,8 @@ func TestTemplatesParseAndRender(t *testing.T) {
 			path:   "templates/payment_success.txt",
 			isHTML: false,
 			data: map[string]string{
-				"PaymentID":   "pay-123",
-				"Amount":      "$10.00",
+				"PaymentID":    "pay-123",
+				"Amount":       "$10.00",
 				"MerchantName": "Acme Corp",
 			},
 		},

@@ -39,12 +39,12 @@ type Config struct {
 	MCBaseBackoff int    `env:"MC_BASE_BACKOFF_MS" env-default:"100" validate:"gt=0"`
 	MCMaxBackoff  int    `env:"MC_MAX_BACKOFF_MS" env-default:"2000" validate:"gt=0"`
 
-	SMTPHost     string `env:"SMTP_HOST" env-default:""`
-	SMTPPort     int    `env:"SMTP_PORT" env-default:"587" validate:"min=1,max=65535"`
-	SMTPUser     string `env:"SMTP_USER" env-default:""`
-	SMTPPass     string `env:"SMTP_PASS" env-default:""`
-	SMTPTLS      string `env:"SMTP_TLS" env-default:"starttls" validate:"oneof=none starttls tls"`
-	SMTPFrom     string `env:"SMTP_FROM" env-default:"noreply@localhost"`
+	SMTPHost string `env:"SMTP_HOST" env-default:""`
+	SMTPPort int    `env:"SMTP_PORT" env-default:"587" validate:"min=1,max=65535"`
+	SMTPUser string `env:"SMTP_USER" env-default:""`
+	SMTPPass string `env:"SMTP_PASS" env-default:""`
+	SMTPTLS  string `env:"SMTP_TLS" env-default:"starttls" validate:"oneof=none starttls tls"`
+	SMTPFrom string `env:"SMTP_FROM" env-default:"noreply@localhost"`
 }
 
 func Load() (Config, error) {

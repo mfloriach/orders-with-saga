@@ -212,8 +212,9 @@ func TestCancelledCtxAborts(t *testing.T) {
 	}
 }
 
-// TestDefaultRetryIfReturnsResponse verifies the default retries transport
-// errors only: an HTTP error status returns after one attempt.
+// TestDefaultRetryIfReturnsResponse verifies the default predicate retries
+// non-2xx responses (retryNon2xx): a 503 is retried until the attempt budget
+// runs out instead of being returned after one attempt.
 func TestDefaultRetryIfReturnsResponse(t *testing.T) {
 	s := &script{codes: []int{503}}
 	srv := httptest.NewServer(http.HandlerFunc(s.handler))
@@ -226,7 +227,7 @@ func TestDefaultRetryIfReturnsResponse(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	calls, _, _, _, _ := s.snapshot()
-	if resp.StatusCode != 503 || calls != 1 {
+	if resp.StatusCode != 503 || calls != 3 {
 		t.Fatalf("status=%d calls=%d", resp.StatusCode, calls)
 	}
 }

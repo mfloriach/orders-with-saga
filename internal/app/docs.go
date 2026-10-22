@@ -3,6 +3,8 @@ package app
 import (
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -11,9 +13,33 @@ import (
 // startup. Missing file fails fast, matching the service's boot philosophy.
 var openAPIDoc []byte
 
+// openAPIPath resolves api/openapi.yaml relative to the module root (found by
+// walking up from this file until go.mod appears) so the file is located
+// whether the binary runs from the repo root or tests run from the package
+// directory, both of which set a different working directory.
+func openAPIPath() string {
+	_, file, _, ok := runtime.Caller(1) // caller is init in docs.go
+	path := "api/openapi.yaml"
+	if ok {
+		dir := filepath.Dir(file)
+		for {
+			if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+				path = filepath.Join(dir, "api", "openapi.yaml")
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return path
+}
+
 func init() {
 	var err error
-	openAPIDoc, err = os.ReadFile("api/openapi.yaml")
+	openAPIDoc, err = os.ReadFile(openAPIPath())
 	if err != nil {
 		panic("failed to load api/openapi.yaml: " + err.Error())
 	}

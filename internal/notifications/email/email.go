@@ -18,11 +18,11 @@ type PaymentSuccessfully struct {
 }
 
 type RefundInProgress struct {
-	RefundID       string
-	Price          domain.Price
-	MerchantName   string
-	RefundReason   string
-	User           domain.User
+	RefundID     string
+	Price        domain.Price
+	MerchantName string
+	RefundReason string
+	User         domain.User
 }
 
 func (e *sMTPSender) SendPaymentSuccessfully(ctx context.Context, cnt PaymentSuccessfully) error {
@@ -55,10 +55,10 @@ func (e *sMTPSender) SendRefundInProgress(ctx context.Context, cnt RefundInProgr
 	subject := fmt.Sprintf("Refund In Progress - %s", cnt.RefundID)
 
 	body, err := render("refund_in_progress.html", map[string]any{
-		"RefundID":      cnt.RefundID,
-		"Price":         cnt.Price,
-		"MerchantName":  cnt.MerchantName,
-		"RefundReason":  cnt.RefundReason,
+		"RefundID":     cnt.RefundID,
+		"Price":        cnt.Price,
+		"MerchantName": cnt.MerchantName,
+		"RefundReason": cnt.RefundReason,
 	})
 	if err != nil {
 		return fmt.Errorf("email: render template: %w", err)

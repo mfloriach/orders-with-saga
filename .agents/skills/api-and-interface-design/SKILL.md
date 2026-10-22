@@ -1,21 +1,24 @@
 ---
 name: api-and-interface-design
-description: Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when creating REST or GraphQL endpoints, defining type contracts between modules, or establishing boundaries between frontend and backend.
+description: Guides stable API and interface design in Go. Use when designing Fiber HTTP endpoints, module boundaries, service interfaces, or any public Go contract. Use when defining request/response types, error mapping, validation at boundaries, or interface seams between packages.
 ---
 
-# API and Interface Design
+# API and Interface Design (Go)
 
 ## Overview
 
-Design stable, well-documented interfaces that are hard to misuse. Good interfaces make the right thing easy and the wrong thing hard. This applies to REST APIs, GraphQL schemas, module boundaries, component props, and any surface where one piece of code talks to another.
+Design stable, well-documented interfaces that are hard to misuse. Good interfaces make the right thing easy and the wrong thing hard. In Go this means HTTP endpoints built on Fiber, narrow interfaces at package seams, typed domain errors, and JSON contracts backed by struct tags.
+
+This skill covers the design rules. For the mechanical endpoint recipe — handler skeleton, `apperr` mapping, table tests — see the `go-endpoints` skill; the two are meant to be applied together.
 
 ## When to Use
 
-- Designing new API endpoints
-- Defining module boundaries or contracts between teams
-- Creating component prop interfaces
-- Establishing database schema that informs API shape
-- Changing existing public interfaces
+- Designing new HTTP endpoints or changing existing ones
+- Defining a service interface or a seam between packages
+- Adding fields to a request/response contract or a domain type
+- Mapping service errors to HTTP status codes
+- Establishing database constraints that back an API guarantee (uniqueness, idempotency)
+- Changing any exported Go type or JSON tag another package or client depends on
 
 ## Core Principles
 
@@ -23,345 +26,691 @@ Design stable, well-documented interfaces that are hard to misuse. Good interfac
 
 > With a sufficient number of users of an API, all observable behaviors of your system will be depended on by somebody, regardless of what you promise in the contract.
 
-This means: every public behavior — including undocumented quirks, error message text, timing, and ordering — becomes a de facto contract once users depend on it. Design implications:
+Every observable behavior becomes a de facto contract: JSON field names and whether a field is omitted, error `code` strings, status codes, response headers, ordering, and timing. Design implications:
 
-- **Be intentional about what you expose.** Every observable behavior is a potential commitment.
-- **Don't leak implementation details.** If users can observe it, they will depend on it.
-- **Plan for deprecation at design time.** See `deprecation-and-migration` for how to safely remove things users depend on.
-- **Tests are not enough.** Even with perfect contract tests, Hyrum's Law means "safe" changes can break real users who depend on undocumented behavior.
+- **Be intentional about what you expose.** A JSON tag is a promise; an echoed header is a promise; an error code is a promise.
+- **Don't leak implementation details.** Never expose `err.Error()`, SQL, or internal type names to clients.
+- **Plan for deprecation at design time.** See `deprecation-and-migration`.
+- **Tests are not enough.** Contract tests won't save you from clients depending on undocumented behavior.
 
 ### The One-Version Rule
 
-Avoid forcing consumers to choose between multiple versions of the same dependency or API. Diamond dependency problems arise when different consumers need different versions of the same thing. Design for a world where only one version exists at a time — extend rather than fork.
+Avoid forcing consumers to choose between multiple versions of the same package or API. In Go, a breaking change to an exported type or a `/v2` route duplicates maintenance and splits consumers. Extend instead of fork: add optional fields, new endpoints, new methods on new interfaces. Reserve a major-version bump (`/v2` import path or route prefix) for changes you cannot make additively.
 
 ### 1. Contract First
 
-Define the interface before implementing it. The contract is the spec — implementation follows.
+Define the interface and the wire shape before implementing. In Go the contract is the exported interface plus the JSON tags — both are compiled and reviewed before the body exists.
 
-```typescript
-// Define the contract first
-interface TaskAPI {
-  // Creates a task and returns the created task with server-generated fields
-  createTask(input: CreateTaskInput): Promise<Task>;
+```go
+// domain/payment.go — vocabulary shared by every layer.
+type PaymentStatus string
 
-  // Returns paginated tasks matching filters
-  listTasks(params: ListTasksParams): Promise<PaginatedResult<Task>>;
-
-  // Returns a single task or throws NotFoundError
-  getTask(id: string): Promise<Task>;
-
-  // Partial update — only provided fields change
-  updateTask(id: string, input: UpdateTaskInput): Promise<Task>;
-
-  // Idempotent delete — succeeds even if already deleted
-  deleteTask(id: string): Promise<void>;
+// PaymentService is the seam the transport layer depends on. The concrete
+// *payment.Service satisfies it structurally; neither package imports the other.
+type PaymentService interface {
+	Create(ctx context.Context, merchantID string, price Price, idemHeader string) (*PaymentCaptured, error)
+	Get(ctx context.Context, id string) (*PaymentCaptured, error)
+	List(ctx context.Context, f ListFilter) ([]Payment, int, error)
 }
 ```
+
+The handler still declares the **subset it actually calls** (see [Consumer-Side Narrow Interfaces](#consumer-side-narrow-interfaces)). The domain contract states the full capability; the handler depends only on the slice it uses.
 
 ### 2. Consistent Error Semantics
 
-Pick one error strategy and use it everywhere:
+Pick one error strategy and use it everywhere. In this codebase that means: services return Go errors (sentinels and typed errors); the handler maps them to `apperr` constructors; `apperr.Handler` renders the single JSON envelope.
 
-```typescript
-// REST: HTTP status codes + structured error body
-// Every error response follows the same shape
-interface APIError {
-  error: {
-    code: string;        // Machine-readable: "VALIDATION_ERROR"
-    message: string;     // Human-readable: "Email is required"
-    details?: unknown;   // Additional context when helpful
-  };
+```go
+// Sentinel: callers branch on identity with errors.Is.
+var ErrMerchantNotFound = errors.New("merchant not found")
+
+// Typed error: carries the data the handler needs to build the response.
+type ConflictError struct {
+	PaymentId     string
+	IdempotentKey string
 }
 
-// Status code mapping
-// 400 → Client sent invalid data
-// 401 → Not authenticated
-// 403 → Authenticated but not authorized
-// 404 → Resource not found
-// 409 → Conflict (duplicate, version mismatch)
-// 422 → Validation failed (semantically invalid)
-// 500 → Server error (never expose internal details)
+func (e *ConflictError) Error() string { return "idempotency_conflict" }
 ```
 
-**Don't mix patterns.** If some endpoints throw, others return null, and others return `{ error }` — the consumer can't predict behavior.
+Every error response has the same shape:
+
+```json
+{
+  "code": "merchant_not_found",
+  "title": "Merchant not found",
+  "details": "No merchant exists with the given ID.",
+  "request_id": "f3a1..."
+}
+```
+
+`code` is stable and machine-readable, `title` is a fixed human string, `details` explains without leaking internals, and `fields` carries validation or conflict data. Headers that clients need (for example `Idempotency-Key`, `Retry-After`, `Conflict-Payment-ID`) are set by the `apperr` constructor, not ad hoc in the handler.
+
+| Service outcome | Constructor | Status |
+|---|---|---|
+| Resource missing | `apperr.NotFound()` | 404 |
+| Merchant missing | `apperr.MerchantNotFound()` | 404 |
+| Duplicate / idempotency hit | `apperr.IdempotencyConflict()` / `apperr.EmailTaken()` | 409 |
+| Bad input | `apperr.ValidationFailed(errs)` | 400 |
+| Unparseable JSON | `apperr.InvalidJSON()` | 400 |
+| Rate limited | `apperr.RateLimitedError()` | 429 |
+| Upstream unavailable | `apperr.BadGateway()` | 502 |
+| Anything else | `apperr.InternalError()` | 500 |
+
+**Don't mix patterns.** If some endpoints panic, others return `nil, nil`, and others write the response directly, the consumer cannot predict behavior. One mapping switch per handler, most specific error first, catch-all last:
+
+```go
+p, err := h.svc.Create(c.Context(), b.MerchantID, b.Price, c.Get("Idempotency-Key"))
+var conflict *domain.ConflictError
+switch {
+case errors.Is(err, merchant.ErrNotFound):
+	return apperr.MerchantNotFound()
+case errors.As(err, &conflict):
+	c.Set("Idempotency-Key", conflict.IdempotentKey)
+	return apperr.IdempotencyConflict(conflict.PaymentId)
+case err != nil:
+	return apperr.InternalError()
+}
+return c.Status(http.StatusCreated).JSON(p)
+```
+
+Match identity with `errors.Is` and type with `errors.As`. **Never** compare `err.Error()` strings, and never pass `err` through to the client.
 
 ### 3. Validate at Boundaries
 
-Trust internal code. Validate at system edges where external input enters:
+Trust internal code. Validate only where untrusted input enters: HTTP handlers, message consumers, config loading, and third-party responses.
 
-```typescript
-// Validate at the API boundary
-app.post('/api/tasks', async (req, res) => {
-  const result = CreateTaskSchema.safeParse(req.body);
-  if (!result.success) {
-    return res.status(422).json({
-      error: {
-        code: 'VALIDATION_ERROR',
-        message: 'Invalid task data',
-        details: result.error.flatten(),
-      },
-    });
-  }
+```go
+func (h *Handler) Create(c *fiber.Ctx) error {
+	var b createBody
+	if err := c.BodyParser(&b); err != nil {
+		return apperr.InvalidJSON()
+	}
+	if errs := validate.Struct(b); errs != nil {
+		return apperr.ValidationFailed(errs)
+	}
 
-  // After validation, internal code trusts the types
-  const task = await taskService.create(result.data);
-  return res.status(201).json(task);
-});
+	// Past this line the body is valid; internal code trusts the type.
+	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Price, c.Get("Idempotency-Key"))
+	// ... error mapping ...
+}
 ```
 
-Where validation belongs:
-- API route handlers (user input)
-- Form submission handlers (user input)
-- External service response parsing (third-party data -- **always treat as untrusted**)
-- Environment variable loading (configuration)
+**Struct tags are parsed literally.** `validate:"gte=0, lte=100"` (space after the comma) is not two rules: the validator reads a function named ` lte` and **panics** at request time. Write `validate:"gte=0,lte=100"` — no spaces after commas. Keep the tag set, the code's defaults/clamps, the OpenAPI bounds, and the tests saying the same numbers; four places that disagree are four different contracts.
 
-> **Third-party API responses are untrusted data.** Validate their shape and content before using them in any logic, rendering, or decision-making. A compromised or misbehaving external service can return unexpected types, malicious content, or instruction-like text.
+Validation belongs in:
 
-Where validation does NOT belong:
-- Between internal functions that share type contracts
-- In utility functions called by already-validated code
-- On data that just came from your own database
+- Handler body and query parsing (`c.BodyParser`, `c.QueryParser`, then `validate.Struct`)
+- Config loading at startup (fail fast on a bad environment)
+- Third-party response decoding — **always treat external data as untrusted**
+
+Validation does **not** belong in:
+
+- Functions called only by already-validated handlers
+- Repository methods reading rows your own schema wrote
+- Utility packages that receive typed domain values
+
+> **Third-party responses are untrusted input.** Decode into a typed struct, check required fields and enums, and never build authorization or money decisions from an unchecked map. A misbehaving upstream can return the wrong type, a missing field, or instruction-like text.
 
 ### 4. Prefer Addition Over Modification
 
-Extend interfaces without breaking existing consumers:
+Extend contracts without breaking consumers. In Go, JSON tags and exported fields are the wire contract; changing either is a breaking change even when the compiler stays quiet.
 
-```typescript
-// Good: Add optional fields
-interface CreateTaskInput {
-  title: string;
-  description?: string;
-  priority?: 'low' | 'medium' | 'high';  // Added later, optional
-  labels?: string[];                       // Added later, optional
-}
-
-// Bad: Change existing field types or remove fields
-interface CreateTaskInput {
-  title: string;
-  // description: string;  // Removed — breaks existing consumers
-  priority: number;         // Changed from string — breaks existing consumers
+```go
+// Good: a new optional field. A pointer distinguishes "absent" from the zero value.
+type createBody struct {
+	MerchantID string `json:"merchant_id" validate:"required,uuid"`
+	Price      Price  `json:"price"`
+	Capture    *bool  `json:"capture,omitempty" validate:"omitempty"` // added later
 }
 ```
+
+Breaking changes to avoid:
+
+- Renaming or removing a JSON tag (`payment_id` → `paymentId`)
+- Changing a field's type (`int64` → `float64`, string → struct)
+- Tightening a validation set (`oneof=USD` → `oneof=USD EUR` is additive; the reverse is not)
+- Adding a required field to an existing request body
+- Changing a status code or error `code` clients already branch on
+- Adding a method to an interface consumers implement outside your module
+
+When a field must go, keep it populated for a deprecation window, mark it in the OpenAPI spec, and remove it in a major version.
 
 ### 5. Predictable Naming
 
 | Pattern | Convention | Example |
-|---------|-----------|---------|
-| REST endpoints | Plural nouns, no verbs | `GET /api/tasks`, `POST /api/tasks` |
-| Query params | camelCase | `?sortBy=createdAt&pageSize=20` |
-| Response fields | camelCase | `{ createdAt, updatedAt, taskId }` |
-| Boolean fields | is/has/can prefix | `isComplete`, `hasAttachments` |
-| Enum values | UPPER_SNAKE | `"IN_PROGRESS"`, `"COMPLETED"` |
+|---|---|---|
+| Exported Go identifiers | PascalCase | `PaymentCaptured`, `MerchantID` |
+| JSON fields | snake_case | `merchant_id`, `created_at` |
+| Query params | snake_case | `?amount_gte=100&page=1` |
+| Enum wire values | lowercase snake | `"pending"`, `"in_progress"` |
+| Boolean fields | `is_`/`has_` JSON, `Is`/`Has` Go | `is_active` ↔ `IsActive` |
+| Error codes | snake_case, stable | `merchant_not_found` |
+| Error titles | fixed sentence, no data | `"Merchant not found"` |
+| Routes | plural nouns, no verbs | `POST /payments`, `GET /merchants/:id` |
 
-### 6. Honouring an Idempotency Key
+Go style applies inside the module: short receiver names, `ID` not `Id` in new Go identifiers, error variables prefixed `Err`, and one package-level vocabulary (do not mix `coin` and `currency` for the same concept). Existing exported names (for example `domain.ConflictError.PaymentId`) are part of the contract — rename them only through the breaking-change process, not as a drive-by cleanup.
 
-Accepting an `Idempotency-Key` is the contract. Honouring it is the implementation, and it is where the money is lost — a key the server accepts but handles carelessly is worse than no key at all, because the client now believes retrying is safe.
+### 6. Honour an Idempotency Key
+
+Accepting `Idempotency-Key` is the contract. Honouring it is the implementation, and it is where money is lost. A key the server accepts but handles carelessly is worse than no key, because the client now believes retrying is safe.
 
 **Derive the key from the intent, not the attempt.** The key must be stable across retries of one intent and different across distinct intents:
 
-```typescript
-crypto.randomUUID()                    // ✗ new key per attempt — every retry is a new charge
-`${userId}:${amount}`                  // ✗ two legitimate $50 charges collapse into one
-`${orderId}:${Date.now()}`             // ✗ a timestamp is randomUUID() wearing a hat
+```go
+uuid.NewString()                       // ✗ new key per attempt — every retry charges again
+fmt.Sprintf("%s:%d", merchantID, amt)  // ✗ two legitimate $50 charges collapse into one
+fmt.Sprintf("%s:%d", orderID, time.Now().UnixNano()) // ✗ a timestamp is a UUID in a hat
 
-req.headers['idempotency-key']         // ✓ client generates once, reuses on retry
-`charge:v1:${orderId}`                 // ✓ derived from an immutable identifier
+c.Get("Idempotency-Key")               // ✓ client generates once, reuses on retry
+"charge:v1:" + orderID                 // ✓ derived from an immutable identifier
 ```
 
-The key comes from the client or the initiating event — never from the layer doing the retrying.
+The key comes from the client or the initiating event — never from the layer doing the retrying. A request with no header is a **new intent** and must be documented as not retry-safe; do not silently dedupe keyless requests against each other.
 
 **Claim atomically. A check followed by an act is a race:**
 
-```typescript
-// ✗ TOCTOU: two concurrent retries both read "not seen", both charge
-if (!(await db.exists(key))) {
-  await chargeCard(amount);
-  await db.insert(key);
+```go
+// ✗ TOCTOU: two concurrent retries both read "not seen", both charge.
+if id, _ := repo.IsIdempotent(ctx, merchantID, key); id != "" {
+	return replay(id)
 }
+repo.New(ctx, pending)
 
-// ✓ let the unique constraint pick the winner
-try {
-  await db.insert({ key, state: 'in_progress', requestHash });
-} catch (e) {
-  if (isUniqueViolation(e)) return replayOrReject(key);
-  throw e;
+// ✓ let a unique constraint pick the winner, in one statement.
+_, err := db.Exec(ctx, `
+	INSERT INTO payments (id, merchant_id, idempotency_key, request_hash, state)
+	VALUES ($1, $2, $3, $4, 'in_progress')`,
+	pending.ID, merchantID, key, requestHash)
+
+var pgErr *pgconn.PgError
+if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+	return replayOrReject(ctx, merchantID, key, requestHash)
 }
-const result = await chargeCard(amount);
-await db.update({ key, state: 'succeeded', response: result });
-```
-
-The unique constraint *is* the mechanism. A store that cannot enforce uniqueness in one operation cannot back this.
-
-**Guard the payload.** Same key with a different body is a client bug, and must fail loudly rather than serving the first response to a second request:
-
-```typescript
-if (existing.requestHash !== hash(req.body)) {
-  return res.status(422).json({ error: 'idempotency key reused with a different payload' });
+if err != nil {
+	return fmt.Errorf("claim idempotency key: %w", err)
 }
 ```
+
+The unique index on `(merchant_id, idempotency_key)` **is** the mechanism. A store that cannot enforce uniqueness in one operation cannot back this guarantee. A `SELECT` followed by an `INSERT` is not a guard.
+
+**Guard the payload.** The same key with a different body is a client bug and must fail loudly rather than replaying the first response:
+
+```go
+if existing.RequestHash != requestHash {
+	return apperr.IdempotencyPayloadMismatch() // new constructor, stable code
+}
+```
+
+`request_hash` is a hash of the canonical request body (or the fields that change the effect), stored in the same insert as the key.
 
 **Decide what an in-flight duplicate gets.** The first request is still running when the second arrives — the common case under retry storms:
 
 | Strategy | Response | Use when |
 |---|---|---|
 | Reject | `409 Conflict` | Client can retry later; simplest and safest |
-| Wait | Block for the result, bounded | Caller needs it synchronously |
-| Return pending | `202` + status URL | Long-running effects |
+| Wait | Block for the result, bounded by the request context | Caller needs it synchronously |
+| Return pending | `202 Accepted` + status URL | Long-running effects |
 
 Never let the second caller through because the first "seems stuck". A stalled attempt whose fate is unknown is exactly when duplicating costs most.
 
-**Every call has three outcomes, not two: success, failure, and _unknown_.** A timeout tells you nothing about whether the effect applied. Record the intent *before* calling out, so a crash between the call and the response leaves evidence something must resolve later — rather than a silently retried charge.
+**Every outbound call has three outcomes: success, failure, and unknown.** A timeout tells you nothing about whether the effect applied. Record the intent before calling out — a `state = 'in_progress'` row and a remote idempotency key — so a crash between request and response leaves evidence to reconcile later, rather than a silently retried charge.
 
 **Set retention from the longest retry chain**, not from disk cost. Keys must outlive every path that can re-deliver the same intent, including a dead-letter queue replayed a week later and any provider dispute window. A 24-hour key TTL behind a 7-day DLQ is a duplicate waiting to happen.
 
-## REST API Patterns
+## Go Interface Patterns
+
+### Consumer-Side Narrow Interfaces
+
+Define the interface where it is consumed, and make it as small as the caller needs. The handler never imports repositories, SQL, or HTTP clients; it depends on a one-method seam that tests can stub.
+
+```go
+// creator is the subset of Service this handler calls (stubbed in tests).
+type creator interface {
+	Create(ctx context.Context, merchantID string, price domain.Price, idemHeader string) (*domain.PaymentCaptured, error)
+}
+
+type Handler struct{ svc creator }
+
+func NewHandler(svc creator) *Handler { return &Handler{svc} }
+```
+
+- Accept interfaces, return concrete structs.
+- Don't declare an interface until there is a seam: a second implementation, a test stub, or a package boundary.
+- A 12-method interface where the caller uses one method is a coupling bug. Widen the seam when a new capability is genuinely needed — never reach around it.
+- Keep parameters primitive or small structs; the service translates them into queries.
+- No `any`/`interface{}` in a domain contract. Decode untyped external JSON at the edge, then convert.
+
+### Typed Enums, Not Bare Strings
+
+```go
+type PaymentStatus string
+
+const (
+	PaymentStatusPending    PaymentStatus = "pending"
+	PaymentStatusAuthorized PaymentStatus = "authorized"
+	PaymentStatusCaptured   PaymentStatus = "captured"
+	PaymentStatusFailed     PaymentStatus = "failed"
+	PaymentStatusRefunded   PaymentStatus = "refunded"
+)
+
+func (s PaymentStatus) Valid() bool {
+	switch s {
+	case PaymentStatusPending, PaymentStatusAuthorized, PaymentStatusCaptured, PaymentStatusFailed, PaymentStatusRefunded:
+		return true
+	}
+	return false
+}
+```
+
+A distinct type stops undeclared values reaching a transition or a query. Mirror the vocabulary in the database `CHECK` constraint and in the OpenAPI enum, and extend all three together.
+
+### Sealed Variants When Payloads Differ
+
+Use a typed string plus a `switch` when every state carries the same data. Use a sealed interface only when variants carry different payloads:
+
+```go
+type PaymentEvent interface{ isPaymentEvent() }
+
+type Authorized struct {
+	AuthorizationKey string
+	AuthorizedAt     time.Time
+}
+func (Authorized) isPaymentEvent() {}
+
+type Captured struct {
+	PaidAt time.Time
+}
+func (Captured) isPaymentEvent() {}
+```
+
+The unexported method seals the set to this package; a new variant is a compile-time prompt to update every `switch`.
+
+### Input/Output Separation
+
+```go
+// Input: exactly what the caller may send. Unexported and handler-local.
+type createBody struct {
+	MerchantID string       `json:"merchant_id" validate:"required,uuid"`
+	Price      domain.Price `json:"price"`
+}
+
+// Output: the domain type, including server-generated fields.
+type PaymentCaptured struct {
+	ID             string    `json:"id"`
+	MerchantID     string    `json:"merchant_id"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	Status         string    `json:"status"`
+	PaidAt         time.Time `json:"paid_at"`
+}
+```
+
+Never bind a request directly into a domain type that also has server-owned fields — it lets a client set `id`, `status`, or timestamps.
+
+### Named ID Types
+
+```go
+type MerchantID string
+type PaymentID string
+```
+
+Named types prevent passing a `PaymentID` where a `MerchantID` is expected. Convert explicitly at the boundary (`domain.MerchantID(b.MerchantID)`) so the conversion is visible. Where a field stays `string` for compatibility, keep the name explicit (`paymentID`, not `id`) and document the format.
+
+## HTTP Endpoint Patterns (Fiber)
 
 ### Resource Design
 
 ```
-GET    /api/tasks              → List tasks (with query params for filtering)
-POST   /api/tasks              → Create a task
-GET    /api/tasks/:id          → Get a single task
-PATCH  /api/tasks/:id          → Update a task (partial)
-DELETE /api/tasks/:id          → Delete a task
+GET    /payments              → List payments (filters + pagination)
+POST   /payments              → Create a payment
+GET    /payments/:id          → Get a payment
+PATCH  /payments/:id          → Partially update a payment
+DELETE /payments/:id          → Delete (idempotent; succeeds if already gone)
 
-GET    /api/tasks/:id/comments → List comments for a task (sub-resource)
-POST   /api/tasks/:id/comments → Add a comment to a task
+GET    /merchants/:id/payments → Sub-resource list
 ```
+
+Plural nouns, no verbs, no `/getUser`, no `/createPayment`. Register routes in `internal/app/server.go` behind the shared middleware, and keep public business routes under the rate limiter.
+
+### Handler Shape
+
+Every handler parses, validates, calls exactly one service method, maps errors, and responds. Nothing else lives there.
+
+```go
+func (h *Handler) Create(c *fiber.Ctx) error {
+	var b createBody
+	if err := c.BodyParser(&b); err != nil {
+		return apperr.InvalidJSON()
+	}
+	if errs := validate.Struct(b); errs != nil {
+		return apperr.ValidationFailed(errs)
+	}
+
+	p, err := h.svc.Create(c.Context(), b.MerchantID, b.Price, c.Get("Idempotency-Key"))
+	var conflict *domain.ConflictError
+	switch {
+	case errors.Is(err, merchant.ErrNotFound):
+		return apperr.MerchantNotFound()
+	case errors.As(err, &conflict):
+		c.Set("Idempotency-Key", conflict.IdempotencyKey)
+		return apperr.IdempotencyConflict(conflict.PaymentID)
+	case err != nil:
+		return apperr.InternalError()
+	}
+
+	c.Set("Idempotency-Key", p.IdempotencyKey)
+	return c.Status(http.StatusCreated).JSON(p)
+}
+```
+
+Rules:
+
+- Malformed JSON is always `apperr.InvalidJSON()`; validation failures are always `apperr.ValidationFailed(errs)`.
+- One service call. No business branches, repository calls, or outbound HTTP in the handler.
+- One error-mapping switch, most specific first, `err != nil` catch-all last.
+- Never leak `err.Error()`; headers clients need are set by `apperr` constructors.
+
+### File Layout and Declaration Order
+
+A handler file is read top-to-bottom. Keep declarations in dependency order and
+never interleave the `Handler` type with request types, helpers, or methods. The
+canonical layout is:
+
+1. package and imports
+2. constants (unexported, holding the real default)
+3. the consumer-side service interface
+4. request bodies and param/query structs
+5. response envelopes and shared DTOs
+6. helpers used by the handlers
+7. `Handler` and `NewHandler`
+8. handler methods, in the same order the routes are registered
+
+```go
+const (
+	defaultPage  = 1
+	defaultLimit = 20
+	maxLimit     = 100
+)
+
+// 1. Seam
+type merchantService interface {
+	Register(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error)
+	Get(ctx context.Context, id string) (*domain.Merchant, error)
+	List(ctx context.Context, limit, offset int) ([]domain.Merchant, int, error)
+	Update(ctx context.Context, id string, name, email, webhook *string) (*domain.Merchant, error)
+	Delete(ctx context.Context, id string) error
+}
+
+// 2. Request shapes
+type createBody struct{ ... }
+type updateBody struct{ ... }
+type idParam struct{ ... }
+type listQuery struct{ ... }
+
+// 3. Response shapes
+type Pagination struct{ ... }
+type ListResponse[T any] struct{ ... }
+
+// 4. Helpers
+func merchantID(c *fiber.Ctx) (string, error) { ... }
+
+// 5. Handler and constructor
+type Handler struct{ svc merchantService }
+
+func NewHandler(svc merchantService) *Handler { return &Handler{svc} }
+
+// 6. Methods, matching the route table order
+func (h *Handler) Create(c *fiber.Ctx) error { ... }
+func (h *Handler) List(c *fiber.Ctx) error   { ... }
+func (h *Handler) Get(c *fiber.Ctx) error    { ... }
+func (h *Handler) Update(c *fiber.Ctx) error { ... }
+func (h *Handler) Delete(c *fiber.Ctx) error { ... }
+```
+
+Why this order:
+
+- Types are defined before the code that references them, so a reviewer reads
+  the contract first and the behaviour second.
+- `Handler` and its constructor sit next to the methods they own, not above the
+  request types.
+- One method order — mirrored in `server.go` — makes route/handler drift obvious
+  in review. If `server.go` registers `List` before `Get`, the file declares
+  `List` before `Get`.
+- Constants are handler-local implementation details: `defaultPage`, not
+  `DEFAULT_PAGE`. Exported SCREAMING_SNAKE constants leak into the package API
+  and are not Go naming.
+
+Renaming a type is a contract change. In the same edit, update its doc comment,
+every swag annotation, the OpenAPI schema name, any aliases, and the tests. A
+comment or annotation that still names the old type is a broken contract, not a
+cosmetic bug.
+
+### Error Envelope
+
+`apperr.Handler` (wired as Fiber's `ErrorHandler`) is the only place errors become responses. It emits `code`, `title`, `details`, merges `fields`, injects `request_id`, and applies stored headers. Add a constructor in `pkg/apperr/errors.go` when a new meaning appears; give it a stable snake_case `code`, a fixed `title`, and a `details` string with no dynamic content.
 
 ### Pagination
 
-Paginate list endpoints:
+Every list endpoint accepts `page` + `limit` and returns the same envelope. Parse, default, clamp, then validate in the handler:
 
-```typescript
-// Request
-GET /api/tasks?page=1&pageSize=20&sortBy=createdAt&sortOrder=desc
-
-// Response
-{
-  "data": [...],
-  "pagination": {
-    "page": 1,
-    "pageSize": 20,
-    "totalItems": 142,
-    "totalPages": 8
-  }
+```go
+type listQuery struct {
+	Page      int    `query:"page"  validate:"gte=1"`
+	Limit     int    `query:"limit" validate:"gte=1"`
+	Status    string `query:"status" validate:"omitempty,oneof=pending authorized captured failed refunded"`
+	AmountGte *int64 `query:"amount_gte" validate:"omitempty,gte=0"`
+	AmountLte *int64 `query:"amount_lte" validate:"omitempty,gte=0"`
 }
 ```
+
+```go
+var q listQuery
+if err := c.QueryParser(&q); err != nil {
+	return apperr.ValidationFailed(map[string]string{"query": "malformed query string"})
+}
+// Defaults first: an absent page/limit parses as zero, so validate afterwards.
+if q.Page == 0 {
+	q.Page = 1
+}
+if q.Limit == 0 {
+	q.Limit = 20
+}
+if q.Limit > 100 {
+	q.Limit = 100
+}
+if errs := validate.Struct(q); errs != nil {
+	return apperr.ValidationFailed(errs)
+}
+if q.AmountGte != nil && q.AmountLte != nil && *q.AmountGte > *q.AmountLte {
+	return apperr.ValidationFailed(map[string]string{"amount_gte": "must be <= amount_lte"})
+}
+```
+
+- **`page` defaults to 1, never 0.** With `offset = (page-1)*limit`, a zero
+  default becomes a negative `OFFSET`, which PostgreSQL rejects.
+- **Don't tag `limit` with `lte=100` if the contract says oversized limits are
+  clamped.** The tag rejects the request before the clamp runs. Pick reject or
+  clamp, then make the OpenAPI description and tests say the same thing.
+- **Initialize an empty page to `[]T{}`** (`if items == nil { items = []T{} }`)
+  so JSON is `[]`, not `null`.
+
+```json
+{
+  "data": [],
+  "pagination": { "page": 1, "limit": 20, "total_items": 142, "total_pages": 8 }
+}
+```
+
+```go
+type Page[T any] struct {
+	Data       []T        `json:"data"`
+	Pagination Pagination `json:"pagination"`
+}
+
+type Pagination struct {
+	Page       int `json:"page"`
+	Limit      int `json:"limit"`
+	TotalItems int `json:"total_items"`
+	TotalPages int `json:"total_pages"`
+}
+```
+
+Defaults and clamping are input normalization — handler work, not service work. The service owns filtering semantics and total counts.
 
 ### Filtering
 
-Use query parameters for filters:
+snake_case query params, explicit ranges for anything ordered:
 
 ```
-GET /api/tasks?status=in_progress&assignee=user123&createdAfter=2025-01-01
+GET /payments?status=captured&merchant_id=m-123&amount_gte=100&amount_lte=5000
 ```
+
+Use pointers for optional numeric ranges so "absent" is distinguishable from zero. Reject inverted ranges (`gte > lte`) as a validation error.
 
 ### Partial Updates (PATCH)
 
-Accept partial objects — only update what's provided:
+Accept a partial body; pointer fields distinguish "not provided" from "set to zero":
 
-```typescript
-// Only title changes, everything else preserved
-PATCH /api/tasks/123
-{ "title": "Updated title" }
-```
-
-## TypeScript Interface Patterns
-
-### Use Discriminated Unions for Variants
-
-```typescript
-// Good: Each variant is explicit
-type TaskStatus =
-  | { type: 'pending' }
-  | { type: 'in_progress'; assignee: string; startedAt: Date }
-  | { type: 'completed'; completedAt: Date; completedBy: string }
-  | { type: 'cancelled'; reason: string; cancelledAt: Date };
-
-// Consumer gets type narrowing
-function getStatusLabel(status: TaskStatus): string {
-  switch (status.type) {
-    case 'pending': return 'Pending';
-    case 'in_progress': return `In progress (${status.assignee})`;
-    case 'completed': return `Done on ${status.completedAt}`;
-    case 'cancelled': return `Cancelled: ${status.reason}`;
-  }
-}
-```
-
-### Input/Output Separation
-
-```typescript
-// Input: what the caller provides
-interface CreateTaskInput {
-  title: string;
-  description?: string;
+```go
+type updateBody struct {
+	WebhookURL *string `json:"webhook_url" validate:"omitempty,http_url,max=2000"`
 }
 
-// Output: what the system returns (includes server-generated fields)
-interface Task {
-  id: string;
-  title: string;
-  description: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  createdBy: string;
-}
+// Only fields whose pointer is non-nil are written; everything else is preserved.
 ```
 
-### Use Branded Types for IDs
+An empty PATCH body changes nothing and returns the current resource. PUT (full replacement) is only appropriate when the client truly owns every field.
 
-```typescript
-type TaskId = string & { readonly __brand: 'TaskId' };
-type UserId = string & { readonly __brand: 'UserId' };
+## OpenAPI with Scalar
 
-// Prevents accidentally passing a UserId where a TaskId is expected
-function getTask(id: TaskId): Promise<Task> { ... }
+Annotations live on the handler; the committed spec is `api/openapi.yaml` and is served as-is. The spec is reviewed with the code and never generated ad hoc into a second location.
+
+```go
+// CreatePayment godoc
+// @Summary      Create a payment
+// @Tags         payments
+// @Accept       json
+// @Produce      json
+// @Param        Idempotency-Key header string false "Idempotency key"
+// @Param        body body createBody true "Payment"
+// @Success      201  {object}  domain.PaymentCaptured
+// @Failure      400  {object}  apperr.AppError
+// @Failure      404  {object}  apperr.AppError
+// @Failure      409  {object}  apperr.AppError
+// @Failure      502  {object}  apperr.AppError
+// @Router       /payments [post]
+func (h *Handler) Create(c *fiber.Ctx) error {
 ```
+
+- `internal/app/docs.go` serves `api/openapi.yaml` at `GET /openapi.yaml` and Scalar at `GET /docs`. Reuse `openAPIHandler` and `docsHandler`; do not add a second spec file or Swagger UI.
+- Every new route and every changed request/response type updates `api/openapi.yaml` in the same commit: path, schema, required list, enum, status codes, and error responses.
+- CI must fail if a route registered in `internal/app/server.go` has no corresponding path entry, or if the YAML no longer parses. A small Go test that parses the spec and walks the route table is enough.
+- Eyeball new endpoints in `/docs` before merge.
+
+## Handler Tests
+
+Test through `app.Test` with a stubbed service — no database, no network. Table tests cover validation, error mapping, and the happy path.
+
+```go
+h := NewHandler(stubService{create: tc.stub})
+app := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
+app.Post("/payments", h.Create)
+
+req := httptest.NewRequest("POST", "/payments", strings.NewReader(tc.body))
+req.Header.Set("Content-Type", "application/json")
+resp, err := app.Test(req)
+// assert status, body["code"], and — for validation — the field keys under fields["errors"]
+```
+
+One row per case: malformed JSON, validation failure, service not-found, service conflict, upstream failure, success. List endpoints additionally cover default `page`/`limit`, clamped `limit`, inverted ranges, and the pagination envelope. Assert on the public contract (status, `code`, JSON field names), not internal error strings.
 
 ## Common Rationalizations
 
 | Rationalization | Reality |
 |---|---|
-| "We'll document the API later" | The types ARE the documentation. Define them first. |
-| "We don't need pagination for now" | You will the moment someone has 100+ items. Add it from the start. |
+| "We'll document the API later" | The interface and JSON tags ARE the documentation. Define them first. |
+| "We don't need pagination for now" | You will the moment someone has 100+ rows. Add it from the start. |
 | "PATCH is complicated, let's just use PUT" | PUT requires the full object every time. PATCH is what clients actually want. |
-| "We'll version the API when we need to" | Breaking changes without versioning break consumers. Design for extension from the start. |
+| "We'll version the API when we need to" | Breaking changes without a version break consumers. Design for extension from the start. |
 | "Nobody uses that undocumented behavior" | Hyrum's Law: if it's observable, somebody depends on it. Treat every public behavior as a commitment. |
-| "We can just maintain two versions" | Multiple versions multiply maintenance cost and create diamond dependency problems. Prefer the One-Version Rule. |
-| "Internal APIs don't need contracts" | Internal consumers are still consumers. Contracts prevent coupling and enable parallel work. |
-| "Accepting the Idempotency-Key header is enough" | The header is the contract; storing the key against the result is the implementation. A key you accept but don't honour tells the client retrying is safe when it isn't. |
-| "Our queue guarantees exactly-once delivery" | No queue does across a consumer crash — the broker's ack and your side effect are not in one transaction. Design for at-least-once with idempotent processing. |
+| "We can just add a `/v2` package" | Multiple versions multiply maintenance and split consumers. Prefer the One-Version Rule. |
+| "Internal APIs don't need contracts" | Internal consumers are still consumers. Narrow interfaces prevent coupling and enable parallel work. |
+| "The handler can just query the DB, it's one line" | That line couples transport to storage and makes the handler untestable without a database. One service call. |
+| "We compare the error string, it's quicker" | Error text is not a contract. Use `errors.Is`/`errors.As`; strings change silently. |
+| "Wrapping with `%w` is enough" | The handler must map the error to an `apperr` constructor. An unmapped error becomes a 500 with leaked detail risk. |
+| "Validation in the service is fine" | The service is called by trusted code too. Validate at the edge; keep internals trusting types. |
+| "Accepting the Idempotency-Key header is enough" | The header is the contract; claiming the key atomically is the implementation. A key you accept but don't honour tells the client retrying is safe when it isn't. |
+| "Our queue guarantees exactly-once delivery" | No queue does across a consumer crash — the ack and your side effect are not one transaction. Design for at-least-once with idempotent processing. |
 | "Duplicate requests are rare" | They're *correlated*. Retries spike exactly when a dependency is degraded — the moment duplicates are most likely and most expensive. |
+| "A `SELECT` then `INSERT` is basically atomic" | It's a TOCTOU race. Only a unique constraint claimed in one statement is a guard. |
+| "Go compiles it, so declaration order doesn't matter" | Reviewers read top-down. Interleaving the Handler, request types, and helpers hides the contract and invites stale references. Follow the file layout. |
 
 ## Red Flags
 
+**Contracts and handlers**
+
 - Endpoints that return different shapes depending on conditions
-- Inconsistent error formats across endpoints
-- Validation scattered throughout internal code instead of at boundaries
-- Breaking changes to existing fields (type changes, removals)
-- List endpoints without pagination
-- Verbs in REST URLs (`/api/createTask`, `/api/getUsers`)
-- Third-party API responses used without validation or sanitization
+- Inconsistent error envelopes, or handlers writing error JSON directly
+- Handler imports `database/sql`, `pgx`, an HTTP client, or a repository package
+- More than one service call, or business branching, inside a handler
+- `err.Error()` or SQL text reaching the client
+- Errors matched with `strings.Contains` or `==` on the message
+- Missing `validate` tags on a body or query struct
+- List endpoints without `page`/`limit`, or a `limit` that isn't clamped
+- PATCH fields that aren't pointers, so "absent" overwrites with zero
+- Request bodies bound directly into a domain type with server-owned fields
+- JSON tags renamed/removed, or field types changed in place
+- `any`/`interface{}` in a domain contract
+- A wide interface declared next to its implementation instead of a narrow one at the consumer
+- `Handler` declared above the request/response types, or helpers and methods interleaved with type declarations
+- Handler methods in a different order than the routes in `server.go`
+- Handler-local constants exported in SCREAMING_SNAKE (`DEFAULT_PAGE`) instead of `defaultPage`
+- `defaultPage = 0` (or any default that makes `(page-1)*limit` negative)
+- A space after the comma in a `validate` tag (`"gte=1, lte=100"`) — the validator panics on ` lte`
+- A pagination bound in the tag that contradicts the OpenAPI maximum or the clamp in the handler
+- A renamed response type whose doc comment, swag annotation, or OpenAPI schema still uses the old name
+- An empty list response serializing as `null` because the nil slice was not normalized to `[]T{}`
+
+**Idempotency**
+
 - A `SELECT` for an idempotency key followed by an `INSERT` — that's a race, not a guard
-- An idempotency key derived from a UUID, timestamp, or anything else regenerated per attempt
-- The same key accepted with a different request body, silently returning the first response
-- A key retention window shorter than the longest path that can re-deliver the request
+- An idempotency key derived from a UUID, timestamp, or anything regenerated per attempt
+- The same key accepted with a different body, silently returning the first response
+- An outbound call made before the intent is persisted, so a timeout has no record
+- A key retention window shorter than the longest retry path, including dead-letter replay
+- Keyless requests deduped against each other
+
+**Docs**
+
+- A route in `server.go` with no path in `api/openapi.yaml`
+- A second spec file, or generated output committed next to the committed spec
+- Swagger UI instead of Scalar, or docs served from a different path
 
 ## Verification
 
-After designing an API:
+After designing or changing an API:
 
-- [ ] Every endpoint has typed input and output schemas
-- [ ] Error responses follow a single consistent format
-- [ ] Validation happens at system boundaries only
-- [ ] List endpoints support pagination
-- [ ] New fields are additive and optional (backward compatible)
-- [ ] Naming follows consistent conventions across all endpoints
-- [ ] API documentation or types are committed alongside the implementation
+- [ ] Every endpoint has typed input and output structs with complete tags
+- [ ] Every handler parses, validates, calls one service method, maps errors, responds
+- [ ] Error responses follow the single `apperr` envelope with stable `code`/`title`
+- [ ] Service errors are mapped with `errors.Is`/`errors.As`, catch-all last; nothing leaks
+- [ ] Validation happens at boundaries only; internals trust typed values
+- [ ] List endpoints support `page`/`limit`, clamp the limit, and reject inverted ranges
+- [ ] New fields are additive and optional (pointer or `omitempty`), JSON tags unchanged
+- [ ] Naming follows Go/JSON/query conventions consistently across all endpoints
+- [ ] Handler depends on a narrow consumer-side interface; tests stub it
+- [ ] Table tests cover validation, error mapping, and success through `app.Test`
+- [ ] Handler file follows the canonical declaration order (constants → interface → request/response types → helpers → Handler → methods)
+- [ ] Handler methods appear in the same order as the routes in `server.go`
+- [ ] Handler-local constants are unexported and `defaultPage` is 1
+- [ ] `validate` tags contain no spaces after commas; defaults, clamps, OpenAPI bounds, and tests agree
+- [ ] Renamed types have no stale comment, annotation, alias, or OpenAPI name
+- [ ] Empty list responses serialize as `[]`, not `null`
 - [ ] State-changing endpoints either honour an idempotency key or are documented as unsafe to retry
-- [ ] The key is claimed in one atomic operation, guarded by a unique constraint
+- [ ] The key is claimed in one atomic statement, guarded by a unique constraint
 - [ ] A reused key with a different payload fails loudly rather than replaying the wrong response
-- [ ] The in-flight-duplicate response is a deliberate choice (409, wait, or 202) rather than whatever falls out
+- [ ] The in-flight-duplicate response is a deliberate choice (409, wait, or 202)
+- [ ] Intent is persisted before every outbound call, so "unknown" outcomes are reconcilable
 - [ ] Key retention outlives the longest retry path, including dead-letter replay
+- [ ] `api/openapi.yaml` is updated in the same commit and served at `/openapi.yaml`; `/docs` checked
+- [ ] CI fails when a registered route has no spec entry

@@ -36,5 +36,10 @@ func routes(f *fiber.App, cnt Container) {
 	f.Get("/docs", docsHandler)
 
 	f.Post("/merchants", cnt.Merchant.Create)
+	f.Get("/merchants", cnt.Merchant.List)
+	f.Get("/merchants/:id", cnt.Merchant.Get)
+	f.Patch("/merchants/:id", cnt.Merchant.Update)
+	f.Delete("/merchants/:id", cnt.Merchant.Delete)
+
 	f.Post("/payments", cnt.Payment.Create)
 }

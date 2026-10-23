@@ -20,17 +20,17 @@ type MasterCardResponse struct {
 // simulator. The injected client owns the base URL, auth header, per-attempt
 // timeout, and retry loop; this type knows only the simulator's paths and
 // payloads.
-type MasterCardRepository struct {
+type masterCardRepository struct {
 	client *apiclient.Client
 }
 
-func NewMasterCardRepository(client *apiclient.Client) *MasterCardRepository {
-	return &MasterCardRepository{client: client}
+func NewMasterCardRepository(client *apiclient.Client) *masterCardRepository {
+	return &masterCardRepository{client: client}
 }
 
 // Authorize holds funds via an idempotent PUT and returns the simulator's
 // authorize key, which Capture needs.
-func (r *MasterCardRepository) Authorize(ctx context.Context, paymentID string, amount int64, idemKey string) (string, error) {
+func (r *masterCardRepository) Authorize(ctx context.Context, paymentID string, amount int64, idemKey string) (string, error) {
 	path := "/payment/" + paymentID
 	body, err := json.Marshal(map[string]any{"amount": amount, "idempotency_key": idemKey})
 	if err != nil {
@@ -54,7 +54,7 @@ func (r *MasterCardRepository) Authorize(ctx context.Context, paymentID string, 
 
 // GetPayment fetches the remote (id, status) without interpreting it; callers
 // map the simulator vocabulary themselves.
-func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string) (domain.NetworkStatus, error) {
+func (r *masterCardRepository) GetPayment(ctx context.Context, paymentID string) (domain.NetworkStatus, error) {
 	path := "/payment/" + paymentID
 	resp, err := r.client.Get(ctx, path)
 	if err != nil {
@@ -72,7 +72,7 @@ func (r *MasterCardRepository) GetPayment(ctx context.Context, paymentID string)
 }
 
 // Capture settles a previously authenticated payment via an idempotent POST.
-func (r *MasterCardRepository) Capture(ctx context.Context, authorizeID string) error {
+func (r *masterCardRepository) Capture(ctx context.Context, authorizeID string) error {
 	path := "/payment/" + authorizeID + "/capture"
 	resp, err := r.client.Post(ctx, path, nil)
 	if err != nil {

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Merchant struct {
 	ID         string    `json:"id"`
@@ -28,4 +31,12 @@ type MerchantPaymentSusccessfull struct {
 	PaymentID string
 	Price     Price
 	ProductID string
+}
+
+type MerchantRepository interface {
+	Create(ctx context.Context, m *Merchant) error
+	FindByID(ctx context.Context, id string) (*Merchant, error)
+	List(ctx context.Context, limit, offset int) ([]Merchant, int, error)
+	Update(ctx context.Context, id string, name, email, webhook *string) (*Merchant, error)
+	Delete(ctx context.Context, id string) error
 }

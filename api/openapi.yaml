@@ -3,7 +3,7 @@ info:
   title: Payment Gateway API
   version: 1.0.0
   description: |
-    Business endpoints for the payment gateway: merchant registration and
+    Business endpoints for the payment gateway: merchant management and
     payment creation. Reference UI is served at GET /docs; this definition
     is served at GET /openapi.yaml.
 servers:
@@ -13,6 +13,9 @@ paths:
   /merchants:
     post:
       summary: Register a merchant
+      description: |
+        Creates a merchant. This request is not retry-safe: if the first
+        attempt succeeded, a retry with the same email returns 409.
       tags:
         - merchants
       requestBody:
@@ -32,6 +35,91 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '409':
           $ref: '#/components/responses/EmailTaken'
+    get:
+      summary: List merchants
+      tags:
+        - merchants
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 1
+          description: Page number.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+          description: Page size. Values outside the allowed range are rejected with 400.
+      responses:
+        '200':
+          description: Merchant page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerchantList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+  /merchants/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: Get a merchant
+      tags:
+        - merchants
+      responses:
+        '200':
+          description: Merchant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/MerchantNotFound'
+    patch:
+      summary: Update a merchant
+      tags:
+        - merchants
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MerchantUpdate'
+      responses:
+        '200':
+          description: Merchant updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Merchant'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/MerchantNotFound'
+        '409':
+          $ref: '#/components/responses/EmailTaken'
+    delete:
+      summary: Delete a merchant
+      tags:
+        - merchants
+      responses:
+        '204':
+          description: Merchant deleted, or already absent
+        '400':
+          $ref: '#/components/responses/ValidationError'
   /payments:
     post:
       summary: Create a payment
@@ -119,6 +207,66 @@ components:
           type: string
           format: date-time
           example: '2026-10-18T12:00:00Z'
+    MerchantUpdate:
+      type: object
+      description: |
+        Partial update. Omitted fields are unchanged. Set `webhook_url` to an
+        empty string to clear it.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Acme Corp
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          example: billing@acme.example
+        webhook_url:
+          type: string
+          format: uri
+          maxLength: 2000
+          example: https://acme.example/webhooks
+      additionalProperties: false
+    MerchantList:
+      type: object
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Merchant'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    Pagination:
+      type: object
+      required:
+        - page
+        - limit
+        - total_items
+        - total_pages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          example: 20
+        total_items:
+          type: integer
+          minimum: 0
+          example: 142
+        total_pages:
+          type: integer
+          minimum: 0
+          example: 8
     PaymentCreate:
       type: object
       required:

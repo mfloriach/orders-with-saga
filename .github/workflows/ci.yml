@@ -14,14 +14,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version-file: go.mod
           cache: true
 
-      - name: Lint (go vet)
-        run: go vet ./...
-
-      - name: Format check (gofmt)
-        run: test -z "$(gofmt -l .)"
+      - name: Lint
+        run: make lint
 
   typecheck:
     runs-on: ubuntu-latest
@@ -30,11 +27,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version-file: go.mod
           cache: true
 
-      - name: Type check / build
-        run: go build ./...
+      - name: Build
+        run: make build
 
   test:
     runs-on: ubuntu-latest
@@ -43,11 +40,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version-file: go.mod
           cache: true
 
       - name: Unit tests
-        run: go test ./...
+        run: make test
 
   audit:
     runs-on: ubuntu-latest
@@ -56,11 +53,44 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version-file: go.mod
           cache: true
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # make audit installs govulncheck if missing, then runs: govulncheck ./...
+      - name: govulncheck
+        run: make audit
 
-      - name: Security audit
-        run: govulncheck ./...
+  docker:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: paymentgateway:ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        run: make docker-build DOCKER_CACHE="--cache-from type=gha --cache-to type=gha,mode=max"
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: paymentgateway:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Start stack
+        run: make docker-up
+
+      - name: Check health, readiness, startup log
+        run: make docker-check
+
+      - name: Dump logs
+        if: failure()
+        run: make docker-logs
+
+      - name: Tear down
+        if: always()
+        run: make docker-clean

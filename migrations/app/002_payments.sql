@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE TABLE IF NOT EXISTS payments (
   id UUID PRIMARY KEY,
   merchant_id UUID NOT NULL REFERENCES merchants(id),
@@ -7,3 +8,6 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (merchant_id, idempotency_key)
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS payments;

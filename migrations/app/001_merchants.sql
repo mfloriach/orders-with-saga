@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE TABLE IF NOT EXISTS merchants (
   id UUID PRIMARY KEY,
@@ -6,3 +7,6 @@ CREATE TABLE IF NOT EXISTS merchants (
   webhook_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- +goose Down
+DROP TABLE IF EXISTS merchants;

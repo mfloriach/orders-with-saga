@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,5 +40,11 @@ func main() {
 		_ = c.Shutdown(ctx)
 		_ = app.Shutdown()
 	}()
-	log.Fatal(app.Listen(fmt.Sprintf(":%d", cfg.Port)))
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("could not listen on %s: %v", addr, err)
+	}
+	slog.Info("app started", "addr", ln.Addr().String())
+	log.Fatal(app.Listener(ln))
 }

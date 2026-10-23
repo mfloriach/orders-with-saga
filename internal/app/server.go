@@ -10,7 +10,10 @@ import (
 )
 
 func NewServer(cnt Container) (*fiber.App, error) {
-	f := fiber.New(fiber.Config{ErrorHandler: apperr.Handler})
+	f := fiber.New(fiber.Config{
+		ErrorHandler:          apperr.Handler,
+		DisableStartupMessage: true,
+	})
 
 	configure(f, cnt)
 	routes(f, cnt)

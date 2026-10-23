@@ -2,6 +2,15 @@
 
 This project uses skills installed under `.opencode/skills/` (or a compatible path).
 
+## Setup
+
+Run `make hooks` once per clone to enable the git hooks in `.githooks/`
+(conventional commit messages, gofmt on staged files, lint/build/test before push).
+
+## Commit Messages
+
+`<type>(<scope>): <subject>` — types: `build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test`.
+
 ## Core Rules
 
 - If a task matches a skill, invoke it with the `skill` tool before acting.

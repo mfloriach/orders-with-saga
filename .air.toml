@@ -1,0 +1,21 @@
+# Live reload for local development.
+#
+# Run `air` (or `make dev`) from the repository root. The API loads `.env`
+# relative to the working directory, so `root` must stay "." — air starts the
+# rebuilt binary from the project root, and the app then finds both `.env`
+# and `api/openapi.yaml`.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ./cmd/api"
+  entrypoint = ["./tmp/main"]
+  include_ext = ["go", "env", "html", "txt"]
+  exclude_dir = ["tmp", ".git", "migrations", "openspec", "graphify-out", ".githooks", ".agents", ".opencode"]
+  exclude_regex = ["_test\\.go"]
+  delay = 500
+  send_interrupt = true
+  stop_on_exit = true
+
+[log]
+  time = true

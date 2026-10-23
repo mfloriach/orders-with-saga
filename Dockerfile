@@ -3,11 +3,11 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o /api ./cmd/api
-RUN go build -o /worker ./cmd/worker
+RUN CGO_ENABLED=0 go build -o /out/server ./cmd/api
 
 FROM alpine:3.20
-COPY --from=build /api /api
-COPY --from=build /worker /worker
+WORKDIR /app
+COPY --from=build /out/server /app/server
+COPY --from=build /app/api/openapi.yaml /app/api/openapi.yaml
 EXPOSE 8080
-ENTRYPOINT ["/api"]
+ENTRYPOINT ["/app/server"]

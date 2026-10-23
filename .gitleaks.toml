@@ -1,0 +1,8 @@
+# Gitleaks uses this file automatically when scanning from the repo root.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated graph cache (contains file hashes, not secrets)"
+paths = ['''graphify-out/''']

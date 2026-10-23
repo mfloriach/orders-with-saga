@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+git diff --cached --name-only -z --diff-filter=ACMR -- '*.go' |
+  while IFS= read -r -d '' file; do
+    gofmt -w "$file"
+    git add -- "$file"
+  done

@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE TABLE IF NOT EXISTS payment_step_events (
   id UUID PRIMARY KEY,
   payment_id UUID NOT NULL,
@@ -8,3 +9,6 @@ CREATE TABLE IF NOT EXISTS payment_step_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS payment_step_events_payment_id_idx ON payment_step_events (payment_id);
+
+-- +goose Down
+DROP TABLE IF EXISTS payment_step_events;

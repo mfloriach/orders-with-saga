@@ -1,0 +1,10 @@
+.git
+.github
+.env
+.env.*
+tmp
+graphify-out
+.opencode
+.agents
+.githooks
+openspec

@@ -82,12 +82,7 @@ func (h *Handler) Create(c *fiber.Ctx) error {
 	if err := c.BodyParser(&b); err != nil {
 		return apperr.InvalidJSON()
 	}
-	// An empty webhook means "no webhook", not a malformed URL.
-	toValidate := b
-	if toValidate.WebhookURL != nil && *toValidate.WebhookURL == "" {
-		toValidate.WebhookURL = nil
-	}
-	if errs := validate.Struct(toValidate); errs != nil {
+	if errs := validate.Struct(b); errs != nil {
 		return apperr.ValidationFailed(errs)
 	}
 

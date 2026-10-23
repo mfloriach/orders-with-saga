@@ -6,9 +6,9 @@ import (
 	"paymentgateway/internal/domain"
 )
 
-type Service struct{ repo *Repository }
+type Service struct{ repo domain.MerchantRepository }
 
-func NewService(repo *Repository) *Service { return &Service{repo} }
+func NewService(repo domain.MerchantRepository) *Service { return &Service{repo} }
 
 func (s *Service) Register(ctx context.Context, name, email string, webhook *string) (*domain.Merchant, error) {
 	m := &domain.Merchant{Name: name, Email: email, WebhookURL: webhook}

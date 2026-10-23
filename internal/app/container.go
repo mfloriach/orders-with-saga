@@ -61,18 +61,18 @@ func (c *Container) Shutdown(ctx context.Context) error {
 }
 
 func Build(cfg config.Config) (*Container, error) {
-	appDB, err := config.OpenPostgres(cfg.AppDSN, "app", cfg)
+	appDB, err := config.OpenPostgres("app", cfg.DB)
 	if err != nil {
 		return nil, err
 	}
 
-	ledgerDB, err := config.OpenPostgres(cfg.LedgerDSN, "ledger", cfg)
+	ledgerDB, err := config.OpenPostgres("ledger", cfg.Ledger)
 	if err != nil {
 		appDB.Close()
 		return nil, err
 	}
 
-	rdb, err := config.OpenRedis(cfg)
+	rdb, err := config.OpenRedis(cfg.Redis)
 	if err != nil {
 		appDB.Close()
 		ledgerDB.Close()
@@ -89,10 +89,10 @@ func Build(cfg config.Config) (*Container, error) {
 
 	pApp := repositories.NewPaymentDatabaseRepository(appDB)
 
-	network := NewCardNetwork(cfg)
-	webhookClient := NewWebhook(cfg)
+	network := NewCardNetwork(cfg.CardNetwork)
+	webhookClient := NewWebhook(cfg.Webhook)
 
-	emailSender := email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPTLS, cfg.SMTPFrom)
+	emailSender := email.NewSMTPSender(cfg.Email.Host, cfg.Email.Port, cfg.Email.User, cfg.Email.Pass, cfg.Email.TLS, cfg.Email.From)
 
 	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient, emailSender))
 	pH := payment.NewHandler(pSvc)
@@ -105,15 +105,15 @@ func Build(cfg config.Config) (*Container, error) {
 // and retry policy — including the repo's Retryable classification. An empty
 // base URL leaves a client whose requests all fail, so payment creation fails
 // closed at the network step.
-func NewCardNetwork(cfg config.Config) domain.CardNetwork {
+func NewCardNetwork(cfg config.HTTPClient) domain.CardNetwork {
 	opts := []apiclient.Option{
-		apiclient.WithBaseURL(cfg.MCBaseURL),
+		apiclient.WithBaseURL(cfg.BaseURL),
 		apiclient.WithHeader("Content-Type", "application/json"),
-		apiclient.WithTimeout(time.Duration(cfg.MCTimeout) * time.Second),
+		apiclient.WithTimeout(time.Duration(cfg.Timeout) * time.Second),
 		apiclient.WithRetry(
-			cfg.MCMaxAttempts,
-			time.Duration(cfg.MCBaseBackoff)*time.Millisecond,
-			time.Duration(cfg.MCMaxBackoff)*time.Millisecond,
+			cfg.MaxAttempts,
+			time.Duration(cfg.BaseBackoff)*time.Millisecond,
+			time.Duration(cfg.MaxBackoff)*time.Millisecond,
 			nil,
 		),
 	}
@@ -121,14 +121,14 @@ func NewCardNetwork(cfg config.Config) domain.CardNetwork {
 	return repositories.NewMasterCardRepository(apiclient.New(nil, opts...))
 }
 
-func NewWebhook(cfg config.Config) *apiclient.Client {
+func NewWebhook(cfg config.HTTPClient) *apiclient.Client {
 	return apiclient.New(nil,
 		apiclient.WithHeader("Content-Type", "application/json"),
-		apiclient.WithTimeout(time.Duration(cfg.MCTimeout)*time.Second),
+		apiclient.WithTimeout(time.Duration(cfg.Timeout)*time.Second),
 		apiclient.WithRetry(
-			cfg.MCMaxAttempts,
-			time.Duration(cfg.MCBaseBackoff)*time.Millisecond,
-			time.Duration(cfg.MCMaxBackoff)*time.Millisecond,
+			cfg.MaxAttempts,
+			time.Duration(cfg.BaseBackoff)*time.Millisecond,
+			time.Duration(cfg.MaxBackoff)*time.Millisecond,
 			nil,
 		),
 	)

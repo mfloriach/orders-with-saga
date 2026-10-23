@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.Load(".env")
 	if err != nil {
 		log.Fatalf("invalid config: %v", err)
 	}

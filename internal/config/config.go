@@ -9,52 +9,56 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type Config struct {
-	Port       int    `env:"PORT" env-default:"8080" validate:"required,min=1,max=65535"`
-	AppDSN     string `env:"APP_DSN" env-required:"true" validate:"required"`
-	LedgerDSN  string `env:"LEDGER_DSN" env-required:"true" validate:"required"`
-	RedisAddr  string `env:"REDIS_ADDR" env-required:"true" validate:"required"`
-	AMQPURL    string `env:"RABBITMQ_URL" env-required:"true" validate:"required"`
-	RateLimit  int    `env:"RATE_LIMIT" env-default:"100" validate:"gt=0"`
-	RateWindow int    `env:"RATE_WINDOW_SEC" env-default:"60" validate:"gt=0"`
-
-	PGMaxOpen        int `env:"PG_MAX_OPEN" env-default:"25" validate:"gt=0"`
-	PGMaxIdle        int `env:"PG_MAX_IDLE" env-default:"5" validate:"gte=0"`
-	PGMaxLifetime    int `env:"PG_MAX_LIFETIME_SEC" env-default:"300" validate:"gt=0"`
-	PGMaxIdleTime    int `env:"PG_MAX_IDLE_SEC" env-default:"60" validate:"gt=0"`
-	PGConnectTimeout int `env:"PG_CONNECT_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
-
-	RedisPoolSize     int `env:"REDIS_POOL_SIZE" env-default:"0" validate:"gte=0"`
-	RedisDialTimeout  int `env:"REDIS_DIAL_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
-	RedisReadTimeout  int `env:"REDIS_READ_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
-	RedisWriteTimeout int `env:"REDIS_WRITE_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
-
-	AMQPMaxAttempts int `env:"RABBITMQ_MAX_ATTEMPTS" env-default:"5" validate:"gt=0"`
-	AMQPRetryTTL    int `env:"RABBITMQ_RETRY_TTL_MS" env-default:"1000" validate:"gt=0"`
-
-	MCBaseURL     string `env:"MC_BASE_URL" env-default:""`
-	MCAPIKey      string `env:"MC_API_KEY" env-default:""`
-	MCTimeout     int    `env:"MC_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
-	MCMaxAttempts int    `env:"MC_MAX_ATTEMPTS" env-default:"3" validate:"gt=0"`
-	MCBaseBackoff int    `env:"MC_BASE_BACKOFF_MS" env-default:"100" validate:"gt=0"`
-	MCMaxBackoff  int    `env:"MC_MAX_BACKOFF_MS" env-default:"2000" validate:"gt=0"`
-
-	SMTPHost string `env:"SMTP_HOST" env-default:""`
-	SMTPPort int    `env:"SMTP_PORT" env-default:"587" validate:"min=1,max=65535"`
-	SMTPUser string `env:"SMTP_USER" env-default:""`
-	SMTPPass string `env:"SMTP_PASS" env-default:""`
-	SMTPTLS  string `env:"SMTP_TLS" env-default:"starttls" validate:"oneof=none starttls tls"`
-	SMTPFrom string `env:"SMTP_FROM" env-default:"noreply@localhost"`
+type Postgress struct {
+	DSN              string `env:"DSN" env-required:"true" validate:"required"`
+	PGMaxOpen        int    `env:"MAX_OPEN" env-default:"25" validate:"gt=0"`
+	PGMaxIdle        int    `env:"MAX_IDLE" env-default:"5" validate:"gte=0"`
+	PGMaxLifetime    int    `env:"MAX_LIFETIME_SEC" env-default:"300" validate:"gt=0"`
+	PGMaxIdleTime    int    `env:"MAX_IDLE_SEC" env-default:"60" validate:"gt=0"`
+	PGConnectTimeout int    `env:"CONNECT_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
 }
 
-func Load() (Config, error) {
-	return load(".env")
+type Redis struct {
+	Addr         string `env:"ADDR" env-required:"true" validate:"required"`
+	PoolSize     int    `env:"POOL_SIZE" env-default:"0" validate:"gte=0"`
+	DialTimeout  int    `env:"DIAL_TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
+	ReadTimeout  int    `env:"READ_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
+	WriteTimeout int    `env:"WRITE_TIMEOUT_SEC" env-default:"3" validate:"gt=0"`
+}
+
+type Email struct {
+	Host string `env:"HOST" env-default:""`
+	Port int    `env:"PORT" env-default:"587" validate:"min=1,max=65535"`
+	User string `env:"USER" env-default:""`
+	Pass string `env:"PASS" env-default:""`
+	TLS  string `env:"TLS" env-default:"starttls" validate:"oneof=none starttls tls"`
+	From string `env:"FROM" env-default:"noreply@localhost"`
+}
+
+type HTTPClient struct {
+	BaseURL     string `env:"BASE_URL" env-default:""`
+	APIKey      string `env:"API_KEY" env-default:""`
+	Timeout     int    `env:"TIMEOUT_SEC" env-default:"5" validate:"gt=0"`
+	MaxAttempts int    `env:"MAX_ATTEMPTS" env-default:"3" validate:"gt=0"`
+	BaseBackoff int    `env:"BASE_BACKOFF_MS" env-default:"100" validate:"gt=0"`
+	MaxBackoff  int    `env:"MAX_BACKOFF_MS" env-default:"2000" validate:"gt=0"`
+}
+
+type Config struct {
+	Port int `env:"PORT" env-default:"8080" validate:"required,min=1,max=65535"`
+
+	Redis       Redis      `env-prefix:"REDIS_"`
+	DB          Postgress  `env-prefix:"DB_"`
+	Ledger      Postgress  `env-prefix:"LEDGER_"`
+	Email       Email      `env-prefix:"SMTP_"`
+	Webhook     HTTPClient `env-prefix:"WH_"`
+	CardNetwork HTTPClient `env-prefix:"MC_"`
 }
 
 // load reads path when it exists and falls back to OS env alone, so
 // containers without a file keep working. OS env always wins over the
 // file (godotenv never overrides existing vars; cleanenv.ReadConfig would).
-func load(path string) (Config, error) {
+func Load(path string) (Config, error) {
 	var cfg Config
 	if _, statErr := os.Stat(path); statErr == nil {
 		if err := godotenv.Load(path); err != nil {

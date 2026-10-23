@@ -1,9 +1,6 @@
 package app
 
 import (
-	"time"
-
-	"paymentgateway/internal/ratelimit"
 	"paymentgateway/pkg/apperr"
 	"paymentgateway/pkg/logging"
 
@@ -38,7 +35,6 @@ func routes(f *fiber.App, cnt Container) {
 
 	f.Get("/docs", docsHandler)
 
-	f.Use(ratelimit.Middleware(cnt.Redis, cnt.Config.RateLimit, time.Duration(cnt.Config.RateWindow)*time.Second))
 	f.Post("/merchants", cnt.Merchant.Create)
 	f.Post("/payments", cnt.Payment.Create)
 }

@@ -13,11 +13,11 @@ import (
 var ErrEmailTaken = errors.New("email_taken")
 var ErrNotFound = errors.New("merchant_not_found")
 
-type Repository struct{ db *sql.DB }
+type repository struct{ db *sql.DB }
 
-func NewRepository(db *sql.DB) *Repository { return &Repository{db} }
+func NewRepository(db *sql.DB) *repository { return &repository{db} }
 
-func (r *Repository) Create(ctx context.Context, m *domain.Merchant) error {
+func (r *repository) Create(ctx context.Context, m *domain.Merchant) error {
 	m.ID = uuid.NewString()
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO merchants (id, name, email, webhook_url) VALUES ($1,$2,$3,$4)`,
@@ -33,7 +33,7 @@ func (r *Repository) Create(ctx context.Context, m *domain.Merchant) error {
 		`SELECT created_at FROM merchants WHERE id=$1`, m.ID).Scan(&m.CreatedAt)
 }
 
-func (r *Repository) FindByID(ctx context.Context, id string) (*domain.Merchant, error) {
+func (r *repository) FindByID(ctx context.Context, id string) (*domain.Merchant, error) {
 	var m domain.Merchant
 	err := r.db.QueryRowContext(ctx,
 		`SELECT id, name, email, webhook_url, created_at FROM merchants WHERE id=$1`, id).
@@ -44,7 +44,7 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*domain.Merchant,
 	return &m, err
 }
 
-func (r *Repository) List(ctx context.Context, limit, offset int) ([]domain.Merchant, int, error) {
+func (r *repository) List(ctx context.Context, limit, offset int) ([]domain.Merchant, int, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, email, webhook_url, created_at
 		 FROM merchants
@@ -74,7 +74,7 @@ func (r *Repository) List(ctx context.Context, limit, offset int) ([]domain.Merc
 	return merchants, total, nil
 }
 
-func (r *Repository) Update(ctx context.Context, id string, name, email, webhook *string) (*domain.Merchant, error) {
+func (r *repository) Update(ctx context.Context, id string, name, email, webhook *string) (*domain.Merchant, error) {
 	query := `UPDATE merchants
 	          SET name = COALESCE($2, name),
 	              email = COALESCE($3, email)`
@@ -107,7 +107,7 @@ func (r *Repository) Update(ctx context.Context, id string, name, email, webhook
 	return &m, nil
 }
 
-func (r *Repository) Delete(ctx context.Context, id string) error {
+func (r *repository) Delete(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM merchants WHERE id=$1`, id)
 	return err
 }

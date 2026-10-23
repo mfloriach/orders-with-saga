@@ -1,6 +1,6 @@
 module paymentgateway
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/go-playground/validator/v10 v10.30.5
@@ -34,7 +34,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/rabbitmq/amqp091-go v1.15.0 // indirect
 	github.com/rivo/uniseg v0.4.3 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

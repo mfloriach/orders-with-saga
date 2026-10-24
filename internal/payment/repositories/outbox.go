@@ -11,11 +11,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// storeOutbox inserts the pending outbox record for a payment that was just
-// captured. It runs inside the caller's transaction so the capture status flip
-// and the enqueue commit or roll back together.
-func (r *paymentDatabaseRepository) storeOutbox(ctx context.Context, tx *sql.Tx, p domain.PaymentAuthenticated) error {
-	_, err := tx.ExecContext(ctx, `
+type outboxPayment struct {
+	ID          string
+	PaymentID   string
+	MerchantID  string
+	Status      domain.OutboxStatus
+	Attempts    int64
+	LastError   string
+	CreatedAt   time.Time
+	ProcessedAt sql.NullTime
+}
+
+type paymentOutbox struct{ db *sql.DB }
+
+func NewPaymentOutbox(db *sql.DB) *paymentOutbox {
+	return &paymentOutbox{db}
+}
+
+func (r *paymentOutbox) Store(ctx context.Context, p domain.PaymentAuthenticated) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO outbox_payments (id, payment_id, merchant_id)
 		VALUES ($1, $2, $3)
 	`, uuid.NewString(), p.ID, p.MerchantID)
@@ -26,10 +40,7 @@ func (r *paymentDatabaseRepository) storeOutbox(ctx context.Context, tx *sql.Tx,
 	return nil
 }
 
-// Pending returns captured payments whose outbox processing has not completed
-// yet — captured but not processed. Callers claim and flip statuses as their
-// processing attempts finish.
-func (r *paymentDatabaseRepository) Pending(ctx context.Context) ([]*domain.OutboxPayment, error) {
+func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPayment, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT o.id, o.payment_id, o.merchant_id, o.status, o.attempts, o.last_error, o.created_at, o.processed_at
 		FROM outbox_payments o
@@ -67,17 +78,4 @@ func (r *paymentDatabaseRepository) Pending(ctx context.Context) ([]*domain.Outb
 	}
 
 	return out, nil
-}
-
-// outboxPayment mirrors the outbox_payments row so scans target concrete
-// columns before translating into the domain type.
-type outboxPayment struct {
-	ID          string
-	PaymentID   string
-	MerchantID  string
-	Status      domain.OutboxStatus
-	Attempts    int64
-	LastError   string
-	CreatedAt   time.Time
-	ProcessedAt sql.NullTime
 }

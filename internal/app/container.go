@@ -94,7 +94,7 @@ func Build(cfg config.Config) (*Container, error) {
 
 	emailSender := email.NewSMTPSender(cfg.Email.Host, cfg.Email.Port, cfg.Email.User, cfg.Email.Pass, cfg.Email.TLS, cfg.Email.From)
 
-	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient, emailSender))
+	pSvc := payment.NewService(pApp, mRepo, workflow.NewWorkflow(pApp, network, mRepo, webhookClient, emailSender, appDB))
 	pH := payment.NewHandler(pSvc)
 
 	return &Container{AppDB: appDB, LedgerDB: ledgerDB, Redis: rdb, Logger: logger, Tracer: tp, Config: cfg, Merchant: mH, Payment: pH}, nil

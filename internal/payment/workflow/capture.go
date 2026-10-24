@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"paymentgateway/internal/domain"
@@ -10,6 +11,8 @@ import (
 type capture struct {
 	Payments    domain.PaymentRepository
 	CardNetwork domain.CardNetwork
+	Outbox      domain.OutBoxPaymentRepository
+	Db          *sql.DB
 }
 
 func (a capture) Name() string { return "capture" }
@@ -25,9 +28,23 @@ func (a capture) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return err
 	}
 
+	tx, err := a.Db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin capture transaction for payment %q: %w", p.ID, err)
+	}
+	defer tx.Rollback()
+
 	pCaptured, err := a.Payments.Captured(ctx, *p)
 	if err != nil {
 		return err
+	}
+
+	if err := a.Outbox.Store(ctx, *p); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit capture transaction for payment %q: %w", p.ID, err)
 	}
 
 	w.Captured = &pCaptured

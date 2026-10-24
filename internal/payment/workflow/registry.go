@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"database/sql"
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/notifications/email"
 	"paymentgateway/pkg/apiclient"
@@ -22,9 +23,10 @@ func NewWorkflow(
 	merchants MerchantLookup,
 	client *apiclient.Client,
 	emailSender email.Senders,
+	db *sql.DB,
 ) *saga.Saga[PaymentWorkflow] {
 	authorize := authorize{Payments: payments, CardNetwork: cardNetwork}
-	capture := capture{Payments: payments, CardNetwork: cardNetwork}
+	capture := capture{Payments: payments, CardNetwork: cardNetwork, Db: db}
 	webhookStep := webhook{Client: client}
 	emailStep := emailStep{Sender: emailSender}
 

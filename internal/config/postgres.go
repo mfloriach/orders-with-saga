@@ -27,5 +27,6 @@ func OpenPostgres(name string, cfg Postgress) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping %s: %w", name, err)
 	}
+
 	return db, nil
 }

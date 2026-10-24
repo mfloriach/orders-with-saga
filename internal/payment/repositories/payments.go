@@ -77,13 +77,7 @@ func (r *paymentDatabaseRepository) Authorized(ctx context.Context, p domain.Pay
 }
 
 func (r *paymentDatabaseRepository) Captured(ctx context.Context, p domain.PaymentAuthenticated) (domain.PaymentCaptured, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return domain.PaymentCaptured{}, fmt.Errorf("begin capture transaction for payment %q: %w", p.ID, err)
-	}
-	defer tx.Rollback() // no-op once the transaction commits
-
-	result, err := tx.ExecContext(ctx, `
+	result, err := r.db.ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'captured'
 		WHERE id = $1
@@ -100,14 +94,6 @@ func (r *paymentDatabaseRepository) Captured(ctx context.Context, p domain.Payme
 
 	if rows == 0 {
 		return domain.PaymentCaptured{}, fmt.Errorf("payment %q not found or not authorized", p.ID)
-	}
-
-	if err := r.storeOutbox(ctx, tx, p); err != nil {
-		return domain.PaymentCaptured{}, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return domain.PaymentCaptured{}, fmt.Errorf("commit capture transaction for payment %q: %w", p.ID, err)
 	}
 
 	return domain.PaymentCaptured{

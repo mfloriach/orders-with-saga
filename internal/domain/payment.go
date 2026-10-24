@@ -59,3 +59,29 @@ const (
 	PaymentStatusFailed     PaymentStatus = "failed"
 	PaymentStatusRefunded   PaymentStatus = "refunded"
 )
+
+// OutboxStatus is the lifecycle state of a captured payment waiting for its
+// post-capture processing. The database CHECK constraint mirrors this
+// vocabulary; extend both together.
+type OutboxStatus string
+
+const (
+	OutboxStatusPending   OutboxStatus = "pending"
+	OutboxStatusProcessed OutboxStatus = "processed"
+	OutboxStatusFailed    OutboxStatus = "failed"
+)
+
+// OutboxPayment records a captured payment whose follow-up processing has not
+// completed yet. Status pending means captured-but-unprocessed; processed and
+// failed mean an attempt finished (processed = follow-up delivered, failed =
+// retry pending).
+type OutboxPayment struct {
+	ID          string       `json:"id"`
+	PaymentID   string       `json:"payment_id"`
+	MerchantID  string       `json:"merchant_id"`
+	Status      OutboxStatus `json:"status"`
+	Attempts    int64        `json:"attempts"`
+	LastError   string       `json:"last_error"`
+	CreatedAt   time.Time    `json:"created_at"`
+	ProcessedAt time.Time    `json:"processed_at"`
+}

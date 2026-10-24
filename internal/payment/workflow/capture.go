@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
 )
 
@@ -28,28 +29,20 @@ func (a capture) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return err
 	}
 
-	tx, err := a.Db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin capture transaction for payment %q: %w", p.ID, err)
-	}
-	defer tx.Rollback()
+	return config.WithinTx(ctx, a.Db, func(txCtx context.Context) error {
+		pCaptured, err := a.Payments.Captured(txCtx, *p)
+		if err != nil {
+			return err
+		}
 
-	pCaptured, err := a.Payments.Captured(ctx, *p)
-	if err != nil {
-		return err
-	}
+		if err := a.Outbox.Store(txCtx, *p); err != nil {
+			return err
+		}
 
-	if err := a.Outbox.Store(ctx, *p); err != nil {
-		return err
-	}
+		w.Captured = &pCaptured
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit capture transaction for payment %q: %w", p.ID, err)
-	}
-
-	w.Captured = &pCaptured
-
-	return nil
+		return nil
+	})
 }
 
 func (a capture) Compensate(ctx context.Context, w *PaymentWorkflow) error {

@@ -30,3 +30,51 @@ func OpenPostgres(name string, cfg Postgress) (*sql.DB, error) {
 
 	return db, nil
 }
+
+type DBTX interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func Executor(ctx context.Context, db *sql.DB) DBTX {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx
+	}
+	return db
+}
+
+type txKey struct{}
+
+func WithTx(ctx context.Context, tx *sql.Tx) context.Context {
+	return context.WithValue(ctx, txKey{}, tx)
+}
+
+func TxFromContext(ctx context.Context) (*sql.Tx, bool) {
+	tx, ok := ctx.Value(txKey{}).(*sql.Tx)
+	return tx, ok
+}
+
+func WithinTx(
+	ctx context.Context,
+	db *sql.DB,
+	fn func(context.Context) error,
+) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	txCtx := WithTx(ctx, tx)
+
+	if err := fn(txCtx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}

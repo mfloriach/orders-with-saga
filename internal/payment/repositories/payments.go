@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
 
 	"github.com/google/uuid"
@@ -37,7 +38,7 @@ func (r *paymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPe
 	p.ID = uuid.NewString()
 	p.Status = domain.PaymentStatusPending
 
-	_, err := r.db.ExecContext(ctx,
+	_, err := config.Executor(ctx, r.db).ExecContext(ctx,
 		`INSERT INTO payments (id, merchant_id, amount, coin, idempotency_key, status) VALUES ($1,$2,$3,$4,$5,$6)`,
 		p.ID, p.MerchantID, p.Price.Amount, p.Price.Coin, p.IdempotencyKey, p.Status)
 
@@ -49,12 +50,12 @@ func (r *paymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPe
 		return err
 	}
 
-	return r.db.QueryRowContext(ctx,
+	return config.Executor(ctx, r.db).QueryRowContext(ctx,
 		`SELECT created_at FROM payments WHERE id=$1`, p.ID).Scan(&p.CreatedAt)
 }
 
 func (r *paymentDatabaseRepository) Authorized(ctx context.Context, p domain.PaymentPending, authorizationID string) (domain.PaymentAuthenticated, error) {
-	result, err := r.db.ExecContext(ctx, `
+	result, err := config.Executor(ctx, r.db).ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'authorized'
 		WHERE id = $1
@@ -77,7 +78,7 @@ func (r *paymentDatabaseRepository) Authorized(ctx context.Context, p domain.Pay
 }
 
 func (r *paymentDatabaseRepository) Captured(ctx context.Context, p domain.PaymentAuthenticated) (domain.PaymentCaptured, error) {
-	result, err := r.db.ExecContext(ctx, `
+	result, err := config.Executor(ctx, r.db).ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'captured'
 		WHERE id = $1
@@ -103,7 +104,7 @@ func (r *paymentDatabaseRepository) Captured(ctx context.Context, p domain.Payme
 }
 
 func (r *paymentDatabaseRepository) Failed(ctx context.Context, paymentId string, err error) (domain.PaymentFailed, error) {
-	result, execErr := r.db.ExecContext(ctx, `
+	result, execErr := config.Executor(ctx, r.db).ExecContext(ctx, `
 		UPDATE payments
 		SET status = 'failed'
 		WHERE id = $1
@@ -130,7 +131,7 @@ func (r *paymentDatabaseRepository) Failed(ctx context.Context, paymentId string
 func (r *paymentDatabaseRepository) IsIdempotent(ctx context.Context, merchantID, key string) (string, error) {
 	var id string
 
-	err := r.db.QueryRowContext(ctx, `
+	err := config.Executor(ctx, r.db).QueryRowContext(ctx, `
         SELECT id
         FROM payments
         WHERE merchant_id = $1

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
 
 	"github.com/google/uuid"
@@ -29,7 +30,7 @@ func NewPaymentOutbox(db *sql.DB) *paymentOutbox {
 }
 
 func (r *paymentOutbox) Store(ctx context.Context, p domain.PaymentAuthenticated) error {
-	_, err := r.db.ExecContext(ctx, `
+	_, err := config.Executor(ctx, r.db).ExecContext(ctx, `
 		INSERT INTO outbox_payments (id, payment_id, merchant_id)
 		VALUES ($1, $2, $3)
 	`, uuid.NewString(), p.ID, p.MerchantID)
@@ -41,7 +42,7 @@ func (r *paymentOutbox) Store(ctx context.Context, p domain.PaymentAuthenticated
 }
 
 func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPayment, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	rows, err := config.Executor(ctx, r.db).QueryContext(ctx, `
 		SELECT o.id, o.payment_id, o.merchant_id, o.status, o.attempts, o.last_error, o.created_at, o.processed_at
 		FROM outbox_payments o
 		WHERE o.status = $1

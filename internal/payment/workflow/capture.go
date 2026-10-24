@@ -25,18 +25,17 @@ func (a capture) Do(ctx context.Context, w *PaymentWorkflow) error {
 	}
 
 	if err := a.CardNetwork.Capture(ctx, p.ID); err != nil {
-		a.Payments.Failed(ctx, p.ID, fmt.Errorf("payment: failed to capture: %w", err))
-		return err
+		return fmt.Errorf("card network capture failed paymentID: %s", p.ID)
 	}
 
 	return config.WithinTx(ctx, a.Db, func(txCtx context.Context) error {
 		pCaptured, err := a.Payments.Captured(txCtx, *p)
 		if err != nil {
-			return err
+			return fmt.Errorf("could not update payment status to captured paymentID: %s", p.ID)
 		}
 
 		if err := a.Outbox.Store(txCtx, *p); err != nil {
-			return err
+			return fmt.Errorf("could not update payment outbox paymentID: %s", p.ID)
 		}
 
 		w.Captured = &pCaptured

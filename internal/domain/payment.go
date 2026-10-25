@@ -105,4 +105,7 @@ type OutboxPayment struct {
 type OutBoxPaymentRepository interface {
 	Store(ctx context.Context, p PaymentAuthenticated) error
 	GetByStatus(ctx context.Context) ([]*OutboxPayment, error)
+	MarkProcessed(ctx context.Context, outboxID string) error
+	MarkFailed(ctx context.Context, outboxID string, lastError string) error
+	IncrementAttempts(ctx context.Context, outboxID string, lastError string) error
 }

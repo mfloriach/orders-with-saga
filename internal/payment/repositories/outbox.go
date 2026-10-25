@@ -56,7 +56,8 @@ func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPaymen
 	var out []*domain.OutboxPayment
 	for rows.Next() {
 		var o outboxPayment
-		if err := rows.Scan(&o.ID, &o.PaymentID, &o.MerchantID, &o.Status, &o.Attempts, &o.LastError, &o.CreatedAt, &o.ProcessedAt); err != nil {
+		var lastError sql.NullString
+		if err := rows.Scan(&o.ID, &o.PaymentID, &o.MerchantID, &o.Status, &o.Attempts, &lastError, &o.CreatedAt, &o.ProcessedAt); err != nil {
 			return nil, fmt.Errorf("scan pending outbox payment %q: %w", o.PaymentID, err)
 		}
 
@@ -66,7 +67,7 @@ func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPaymen
 			MerchantID:  o.MerchantID,
 			Status:      o.Status,
 			Attempts:    o.Attempts,
-			LastError:   o.LastError,
+			LastError:   lastError.String,
 			CreatedAt:   o.CreatedAt,
 			ProcessedAt: o.ProcessedAt.Time,
 		})
@@ -79,4 +80,54 @@ func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPaymen
 	}
 
 	return out, nil
+}
+
+func (r *paymentOutbox) MarkProcessed(ctx context.Context, outboxID string) error {
+	res, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+		UPDATE outbox_payments
+		SET status = 'processed', processed_at = now()
+		WHERE id = $1 AND status = 'pending'
+	`, outboxID)
+	if err != nil {
+		return fmt.Errorf("mark outbox payment %q processed: %w", outboxID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get outbox payment %q affected rows: %w", outboxID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("outbox payment %q not found or not pending", outboxID)
+	}
+	return nil
+}
+
+func (r *paymentOutbox) MarkFailed(ctx context.Context, outboxID string, lastError string) error {
+	res, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+		UPDATE outbox_payments
+		SET status = 'failed', last_error = $2
+		WHERE id = $1 AND status = 'pending'
+	`, outboxID, lastError)
+	if err != nil {
+		return fmt.Errorf("mark outbox payment %q failed: %w", outboxID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get outbox payment %q affected rows: %w", outboxID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("outbox payment %q not found or not pending", outboxID)
+	}
+	return nil
+}
+
+func (r *paymentOutbox) IncrementAttempts(ctx context.Context, outboxID string, lastError string) error {
+	_, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+		UPDATE outbox_payments
+		SET attempts = attempts + 1, last_error = $2
+		WHERE id = $1 AND status = 'pending'
+	`, outboxID, lastError)
+	if err != nil {
+		return fmt.Errorf("increment outbox payment %q attempts: %w", outboxID, err)
+	}
+	return nil
 }

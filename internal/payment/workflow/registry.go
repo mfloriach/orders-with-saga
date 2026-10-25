@@ -24,9 +24,10 @@ func NewWorkflow(
 	client *apiclient.Client,
 	emailSender email.Senders,
 	db *sql.DB,
+	outbox domain.OutBoxPaymentRepository,
 ) *saga.Saga[PaymentWorkflow] {
 	authorize := authorize{Payments: payments, CardNetwork: cardNetwork}
-	capture := capture{Payments: payments, CardNetwork: cardNetwork, Db: db}
+	capture := capture{Payments: payments, CardNetwork: cardNetwork, Outbox: outbox, Db: db}
 	webhookStep := webhook{Client: client}
 	emailStep := emailStep{Sender: emailSender}
 

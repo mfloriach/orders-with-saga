@@ -44,6 +44,12 @@ type HTTPClient struct {
 	MaxBackoff  int    `env:"MAX_BACKOFF_MS" env-default:"2000" validate:"gt=0"`
 }
 
+type RabbitMQ struct {
+	URL         string `env:"URL" env-required:"true" validate:"required"`
+	MaxAttempts int    `env:"MAX_ATTEMPTS" env-default:"3" validate:"gt=0"`
+	RetryTTLMS  int    `env:"RETRY_TTL_MS" env-default:"1000" validate:"gt=0"`
+}
+
 type Config struct {
 	Port int `env:"PORT" env-default:"8080" validate:"required,min=1,max=65535"`
 
@@ -53,6 +59,7 @@ type Config struct {
 	Email       Email      `env-prefix:"SMTP_"`
 	Webhook     HTTPClient `env-prefix:"WH_"`
 	CardNetwork HTTPClient `env-prefix:"MC_"`
+	RabbitMQ    RabbitMQ   `env-prefix:"RABBITMQ_"`
 }
 
 // load reads path when it exists and falls back to OS env alone, so

@@ -24,7 +24,8 @@ type payment struct {
 	CreatedAt         time.Time
 	AuthenticationKey string
 	PaidAt            time.Time
-	Reason            string
+	ReasonFailure     string
+	ReasonRefund      string
 	RefundAt          time.Time
 }
 
@@ -38,11 +39,10 @@ func (r *paymentDatabaseRepository) New(ctx context.Context, p *domain.PaymentPe
 	p.ID = uuid.NewString()
 	p.Status = domain.PaymentStatusPending
 
-	_, err := config.Executor(ctx, r.db).ExecContext(ctx,
+	if _, err := config.Executor(ctx, r.db).ExecContext(ctx,
 		`INSERT INTO payments (id, merchant_id, amount, coin, idempotency_key, status) VALUES ($1,$2,$3,$4,$5,$6)`,
-		p.ID, p.MerchantID, p.Price.Amount, p.Price.Coin, p.IdempotencyKey, p.Status)
+		p.ID, p.MerchantID, p.Price.Amount, p.Price.Coin, p.IdempotencyKey, p.Status); err != nil {
 
-	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return domain.ErrConflict
@@ -124,7 +124,7 @@ func (r *paymentDatabaseRepository) Failed(ctx context.Context, paymentId string
 	}
 
 	return domain.PaymentFailed{
-		Reason: err.Error(),
+		ReasonFailed: err.Error(),
 	}, nil
 }
 
@@ -146,4 +146,64 @@ func (r *paymentDatabaseRepository) IsIdempotent(ctx context.Context, merchantID
 	}
 
 	return id, nil
+}
+
+func (r *paymentDatabaseRepository) GetPaymentByID(ctx context.Context, paymentID string) (domain.PaymentState, error) {
+	var p payment
+
+	err := config.Executor(ctx, r.db).QueryRowContext(ctx, `
+        SELECT id, merchant_id, amount, coin, idempotency_key, status, created_at, authentication_key, paied_at, reason_failure, reason_refund
+        FROM payments
+        WHERE id = $1
+    `, paymentID).Scan(&p.ID, &p.MerchantID, &p.Amount,
+		&p.Coin, &p.IdempotencyKey, &p.Status, &p.CreatedAt,
+		p.AuthenticationKey, p.PaidAt, p.ReasonFailure, p.ReasonRefund)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("get payment %q: %w", paymentID, err)
+	}
+
+	// Every state shares this payload; each status only adds its own fields on
+	// top, and columns that are not persisted yet (authentication key, paid_at,
+	// reason, refund_at) stay zero.
+	pending := domain.PaymentPending{
+		ID:             p.ID,
+		MerchantID:     p.MerchantID,
+		Price:          domain.Price{Amount: p.Amount, Coin: p.Coin},
+		IdempotencyKey: p.IdempotencyKey,
+		Status:         p.Status,
+		CreatedAt:      p.CreatedAt,
+	}
+
+	switch p.Status {
+	case domain.PaymentStatusPending:
+		return pending, nil
+	case domain.PaymentStatusAuthorized:
+		return domain.PaymentAuthenticated{
+			PaymentPending:    pending,
+			AuthenticationKey: p.AuthenticationKey,
+		}, nil
+	case domain.PaymentStatusCaptured:
+		return domain.PaymentCaptured{
+			PaymentAuthenticated: domain.PaymentAuthenticated{PaymentPending: pending},
+			PaidAt:               p.PaidAt,
+		}, nil
+	case domain.PaymentStatusFailed:
+		return domain.PaymentFailed{
+			PaymentPending: pending,
+			ReasonFailed:   p.ReasonFailure,
+		}, nil
+	case domain.PaymentStatusRefunded:
+		return domain.PaymentRefund{
+			PaymentCaptured: domain.PaymentCaptured{
+				PaymentAuthenticated: domain.PaymentAuthenticated{PaymentPending: pending},
+			},
+			RefundAt:     p.RefundAt,
+			ReasonRefund: p.ReasonRefund,
+		}, nil
+	default:
+		return nil, fmt.Errorf("payment %q has unknown status %q", paymentID, p.Status)
+	}
 }

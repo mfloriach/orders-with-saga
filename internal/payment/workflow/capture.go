@@ -57,8 +57,7 @@ func (a capture) Compensate(ctx context.Context, w *PaymentWorkflow) error {
 
 	switch status {
 	case domain.NetworkRejected:
-		_, err := a.Payments.Failed(ctx, p.ID, fmt.Errorf("rejected by card network"))
-		if err != nil {
+		if _, err := a.Payments.Failed(ctx, p.ID, fmt.Errorf("rejected by card network")); err != nil {
 			return err
 		}
 		return nil

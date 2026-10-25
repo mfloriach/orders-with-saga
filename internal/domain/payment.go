@@ -7,6 +7,7 @@ import (
 )
 
 type PaymentRepository interface {
+	GetPaymentByID(ctx context.Context, paymentID string) (PaymentState, error)
 	IsIdempotent(ctx context.Context, merchantID, key string) (string, error)
 	New(ctx context.Context, p *PaymentPending) error
 	Authorized(ctx context.Context, p PaymentPending, authorizationID string) (PaymentAuthenticated, error)
@@ -30,6 +31,10 @@ type Price struct {
 	Coin   string `json:"coin" validate:"required,oneof=JPY USD EUR"`
 }
 
+type PaymentState interface {
+	paymentState()
+}
+
 type PaymentPending struct {
 	ID             string        `json:"id"`
 	MerchantID     string        `json:"merchant_id"`
@@ -39,26 +44,36 @@ type PaymentPending struct {
 	CreatedAt      time.Time     `json:"created_at"`
 }
 
+func (PaymentPending) paymentState() {}
+
 type PaymentAuthenticated struct {
 	PaymentPending
 	AuthenticationKey string
 }
+
+func (PaymentAuthenticated) paymentState() {}
 
 type PaymentCaptured struct {
 	PaymentAuthenticated
 	PaidAt time.Time
 }
 
+func (PaymentCaptured) paymentState() {}
+
 type PaymentFailed struct {
 	PaymentPending
-	Reason string
+	ReasonFailed string
 }
+
+func (PaymentFailed) paymentState() {}
 
 type PaymentRefund struct {
 	PaymentCaptured
-	Reason   string
-	RefundAt time.Time
+	ReasonRefund string
+	RefundAt     time.Time
 }
+
+func (PaymentRefund) paymentState() {}
 
 // Status is the payment lifecycle state. A distinct type (not a bare
 // string) so only declared statuses compile — an undeclared value cannot

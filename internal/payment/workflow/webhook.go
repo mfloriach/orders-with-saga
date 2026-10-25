@@ -26,14 +26,14 @@ type webhook struct {
 func (w webhook) Name() string { return "webhook" }
 
 func (w webhook) Do(ctx context.Context, wf *PaymentWorkflow) error {
-	p := wf.Captured
-	if p == nil {
+	p, ok := wf.Payment.(domain.PaymentCaptured)
+	if !ok {
 		return errors.New("payment is not captured")
 	}
 
 	payload, err := json.Marshal(domain.MerchantPaymentSusccessfull{
-		PaymentID: wf.Pending.ID,
-		Price:     wf.Pending.Price,
+		PaymentID: p.ID,
+		Price:     p.Price,
 		ProductID: "xxxx",
 	})
 	if err != nil {

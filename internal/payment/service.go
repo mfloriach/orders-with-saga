@@ -38,7 +38,8 @@ func NewService(
 func (s *Service) Create(ctx context.Context, merchantID string, price domain.Price, idemKey string) (*domain.PaymentCaptured, error) {
 	idemKey = resolveKey(idemKey)
 
-	if _, err := s.merchants.FindByID(ctx, merchantID); err != nil {
+	merchant, err := s.merchants.FindByID(ctx, merchantID)
+	if err != nil {
 		return nil, fmt.Errorf("payment: failed to check merchant: %w", err)
 	}
 
@@ -54,7 +55,7 @@ func (s *Service) Create(ctx context.Context, merchantID string, price domain.Pr
 	}
 
 	pPending := &domain.PaymentPending{ID: uuid.New().String(), MerchantID: merchantID, Price: price, IdempotencyKey: idemKey}
-	wf := workflow.PaymentWorkflow{Pending: pPending}
+	wf := workflow.PaymentWorkflow{Payment: pPending, Merchant: merchant} //TODO: add User
 
 	if err := s.payments.New(ctx, pPending); err != nil {
 		return nil, err
@@ -69,7 +70,7 @@ func (s *Service) Create(ctx context.Context, merchantID string, price domain.Pr
 		return nil, err
 	}
 
-	return wf.Captured, nil
+	return wf.Payment.(*domain.PaymentCaptured), nil
 }
 
 // resolveKey turns the optional Idempotency-Key header into the key we store

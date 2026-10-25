@@ -14,10 +14,10 @@ type authorize struct {
 
 func (a authorize) Name() string { return "authorize" }
 
-func (a authorize) Do(ctx context.Context, w *PaymentWorkflow) error {
-	p := w.Pending
-	if p == nil {
-		return errors.New("payment is not pending")
+func (a authorize) Do(ctx context.Context, wf *PaymentWorkflow) error {
+	p, ok := wf.Payment.(domain.PaymentPending)
+	if !ok {
+		return errors.New("payment is not captured")
 	}
 
 	authorizeId, err := a.CardNetwork.Authorize(ctx, p.ID, p.Price.Amount, p.IdempotencyKey)
@@ -26,12 +26,12 @@ func (a authorize) Do(ctx context.Context, w *PaymentWorkflow) error {
 		return err
 	}
 
-	pAuthorize, err := a.Payments.Authorized(ctx, *p, authorizeId)
+	pAuthorize, err := a.Payments.Authorized(ctx, p, authorizeId)
 	if err != nil {
 		return err
 	}
 
-	w.Authenticated = &pAuthorize
+	wf.Payment = &pAuthorize
 
 	return nil
 }

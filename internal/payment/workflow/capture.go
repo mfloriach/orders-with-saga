@@ -18,10 +18,10 @@ type capture struct {
 
 func (a capture) Name() string { return "capture" }
 
-func (a capture) Do(ctx context.Context, w *PaymentWorkflow) error {
-	p := w.Authenticated
-	if p == nil {
-		return errors.New("payment is not pending")
+func (a capture) Do(ctx context.Context, wf *PaymentWorkflow) error {
+	p, ok := wf.Payment.(domain.PaymentAuthenticated)
+	if !ok {
+		return errors.New("payment is not captured")
 	}
 
 	if err := a.CardNetwork.Capture(ctx, p.ID); err != nil {
@@ -29,25 +29,25 @@ func (a capture) Do(ctx context.Context, w *PaymentWorkflow) error {
 	}
 
 	return config.WithinTx(ctx, a.Db, func(txCtx context.Context) error {
-		pCaptured, err := a.Payments.Captured(txCtx, *p)
+		pCaptured, err := a.Payments.Captured(txCtx, p)
 		if err != nil {
 			return fmt.Errorf("could not update payment status to captured paymentID: %s", p.ID)
 		}
 
-		if err := a.Outbox.Store(txCtx, *p); err != nil {
+		if err := a.Outbox.Store(txCtx, p); err != nil {
 			return fmt.Errorf("could not update payment outbox paymentID: %s", p.ID)
 		}
 
-		w.Captured = &pCaptured
+		wf.Payment = &pCaptured
 
 		return nil
 	})
 }
 
-func (a capture) Compensate(ctx context.Context, w *PaymentWorkflow) error {
-	p := w.Authenticated
-	if p == nil {
-		return errors.New("payment is not pending")
+func (a capture) Compensate(ctx context.Context, wf *PaymentWorkflow) error {
+	p, ok := wf.Payment.(domain.PaymentAuthenticated)
+	if !ok {
+		return errors.New("payment is not captured")
 	}
 
 	status, err := a.CardNetwork.GetPayment(ctx, p.AuthenticationKey)

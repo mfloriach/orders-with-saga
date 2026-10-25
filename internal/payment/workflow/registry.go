@@ -11,10 +11,7 @@ import (
 type PaymentWorkflow struct {
 	User     domain.User
 	Merchant *domain.Merchant
-
-	Pending       *domain.PaymentPending
-	Authenticated *domain.PaymentAuthenticated
-	Captured      *domain.PaymentCaptured
+	Payment  domain.PaymentState
 }
 
 func NewWorkflow(

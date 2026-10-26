@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,8 +24,8 @@ import (
 )
 
 type Container struct {
-	AppDB    *sql.DB
-	LedgerDB *sql.DB
+	AppDB    *config.Database
+	LedgerDB *config.Database
 	Redis    *redis.Client
 	Broker   *config.Broker
 	Logger   *slog.Logger
@@ -52,10 +51,10 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	if err := c.Redis.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close redis: %w", err))
 	}
-	if err := c.AppDB.Close(); err != nil {
+	if err := c.AppDB.FromMaster.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close app db: %w", err))
 	}
-	if err := c.LedgerDB.Close(); err != nil {
+	if err := c.LedgerDB.FromMaster.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("close ledger db: %w", err))
 	}
 	if err := c.Tracer.Shutdown(ctx); err != nil {
@@ -72,21 +71,21 @@ func Build(cfg config.Config) (*Container, error) {
 
 	ledgerDB, err := config.OpenPostgres("ledger", cfg.Ledger)
 	if err != nil {
-		appDB.Close()
+		appDB.FromMaster.Close()
 		return nil, err
 	}
 
 	rdb, err := config.OpenRedis(cfg.Redis)
 	if err != nil {
-		appDB.Close()
-		ledgerDB.Close()
+		appDB.FromMaster.Close()
+		ledgerDB.FromMaster.Close()
 		return nil, err
 	}
 
 	broker, err := config.OpenBroker(cfg)
 	if err != nil {
-		appDB.Close()
-		ledgerDB.Close()
+		appDB.FromMaster.Close()
+		ledgerDB.FromMaster.Close()
 		rdb.Close()
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
 
 	"github.com/google/uuid"
@@ -13,13 +14,13 @@ import (
 var ErrEmailTaken = errors.New("email_taken")
 var ErrNotFound = errors.New("merchant_not_found")
 
-type repository struct{ db *sql.DB }
+type repository struct{ db *config.Database }
 
-func NewRepository(db *sql.DB) *repository { return &repository{db} }
+func NewRepository(db *config.Database) *repository { return &repository{db} }
 
 func (r *repository) Create(ctx context.Context, m *domain.Merchant) error {
 	m.ID = uuid.NewString()
-	_, err := r.db.ExecContext(ctx,
+	_, err := r.db.FromMaster.ExecContext(ctx,
 		`INSERT INTO merchants (id, name, email, webhook_url) VALUES ($1,$2,$3,$4)`,
 		m.ID, m.Name, m.Email, m.WebhookURL)
 	if err != nil {
@@ -29,13 +30,13 @@ func (r *repository) Create(ctx context.Context, m *domain.Merchant) error {
 		}
 		return err
 	}
-	return r.db.QueryRowContext(ctx,
+	return r.db.FromMaster.QueryRowContext(ctx,
 		`SELECT created_at FROM merchants WHERE id=$1`, m.ID).Scan(&m.CreatedAt)
 }
 
 func (r *repository) FindByID(ctx context.Context, id string) (*domain.Merchant, error) {
 	var m domain.Merchant
-	err := r.db.QueryRowContext(ctx,
+	err := r.db.FromMaster.QueryRowContext(ctx,
 		`SELECT id, name, email, webhook_url, created_at FROM merchants WHERE id=$1`, id).
 		Scan(&m.ID, &m.Name, &m.Email, &m.WebhookURL, &m.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -45,7 +46,7 @@ func (r *repository) FindByID(ctx context.Context, id string) (*domain.Merchant,
 }
 
 func (r *repository) List(ctx context.Context, limit, offset int) ([]domain.Merchant, int, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.db.FromMaster.QueryContext(ctx,
 		`SELECT id, name, email, webhook_url, created_at
 		 FROM merchants
 		 ORDER BY created_at DESC, id ASC
@@ -68,7 +69,7 @@ func (r *repository) List(ctx context.Context, limit, offset int) ([]domain.Merc
 	}
 
 	var total int
-	if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM merchants`).Scan(&total); err != nil {
+	if err := r.db.FromMaster.QueryRowContext(ctx, `SELECT count(*) FROM merchants`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return merchants, total, nil
@@ -92,7 +93,7 @@ func (r *repository) Update(ctx context.Context, id string, name, email, webhook
 	           RETURNING id, name, email, webhook_url, created_at`
 
 	var m domain.Merchant
-	err := r.db.QueryRowContext(ctx, query, args...).
+	err := r.db.FromMaster.QueryRowContext(ctx, query, args...).
 		Scan(&m.ID, &m.Name, &m.Email, &m.WebhookURL, &m.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -108,6 +109,6 @@ func (r *repository) Update(ctx context.Context, id string, name, email, webhook
 }
 
 func (r *repository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM merchants WHERE id=$1`, id)
+	_, err := r.db.FromMaster.ExecContext(ctx, `DELETE FROM merchants WHERE id=$1`, id)
 	return err
 }

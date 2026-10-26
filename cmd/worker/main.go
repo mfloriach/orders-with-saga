@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not open app db: %v", err)
 	}
-	defer appDB.Close()
+	defer appDB.FromMaster.Close()
 
 	broker, err := config.OpenBroker(cfg)
 	if err != nil {

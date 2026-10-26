@@ -23,14 +23,14 @@ type outboxPayment struct {
 	ProcessedAt sql.NullTime
 }
 
-type paymentOutbox struct{ db *sql.DB }
+type paymentOutbox struct{ db *config.Database }
 
-func NewPaymentOutbox(db *sql.DB) *paymentOutbox {
+func NewPaymentOutbox(db *config.Database) *paymentOutbox {
 	return &paymentOutbox{db}
 }
 
 func (r *paymentOutbox) Store(ctx context.Context, p domain.PaymentAuthenticated) error {
-	_, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+	_, err := config.Executor(ctx, r.db.FromMaster).ExecContext(ctx, `
 		INSERT INTO outbox_payments (id, payment_id, merchant_id)
 		VALUES ($1, $2, $3)
 	`, uuid.NewString(), p.ID, p.MerchantID)
@@ -42,7 +42,7 @@ func (r *paymentOutbox) Store(ctx context.Context, p domain.PaymentAuthenticated
 }
 
 func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPayment, error) {
-	rows, err := config.Executor(ctx, r.db).QueryContext(ctx, `
+	rows, err := config.Executor(ctx, r.db.FromMaster).QueryContext(ctx, `
 		SELECT o.id, o.payment_id, o.merchant_id, o.status, o.attempts, o.last_error, o.created_at, o.processed_at
 		FROM outbox_payments o
 		WHERE o.status = $1
@@ -83,7 +83,7 @@ func (r *paymentOutbox) GetByStatus(ctx context.Context) ([]*domain.OutboxPaymen
 }
 
 func (r *paymentOutbox) MarkProcessed(ctx context.Context, outboxID string) error {
-	res, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+	res, err := config.Executor(ctx, r.db.FromMaster).ExecContext(ctx, `
 		UPDATE outbox_payments
 		SET status = 'processed', processed_at = now()
 		WHERE id = $1 AND status = 'pending'
@@ -102,7 +102,7 @@ func (r *paymentOutbox) MarkProcessed(ctx context.Context, outboxID string) erro
 }
 
 func (r *paymentOutbox) MarkFailed(ctx context.Context, outboxID string, lastError string) error {
-	res, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+	res, err := config.Executor(ctx, r.db.FromMaster).ExecContext(ctx, `
 		UPDATE outbox_payments
 		SET status = 'failed', last_error = $2
 		WHERE id = $1 AND status = 'pending'
@@ -121,7 +121,7 @@ func (r *paymentOutbox) MarkFailed(ctx context.Context, outboxID string, lastErr
 }
 
 func (r *paymentOutbox) IncrementAttempts(ctx context.Context, outboxID string, lastError string) error {
-	_, err := config.Executor(ctx, r.db).ExecContext(ctx, `
+	_, err := config.Executor(ctx, r.db.FromMaster).ExecContext(ctx, `
 		UPDATE outbox_payments
 		SET attempts = attempts + 1, last_error = $2
 		WHERE id = $1 AND status = 'pending'

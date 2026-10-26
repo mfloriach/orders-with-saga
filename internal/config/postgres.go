@@ -11,7 +11,7 @@ import (
 
 // OpenPostgres opens a tuned pool for dsn and verifies it with a ping.
 // name identifies the pool (e.g. "app", "ledger") in errors.
-func OpenPostgres(name string, cfg Postgress) (*sql.DB, error) {
+func OpenPostgres(name string, cfg Postgress) (*Database, error) {
 	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("open %s pool: %w", name, err)
@@ -28,7 +28,11 @@ func OpenPostgres(name string, cfg Postgress) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping %s: %w", name, err)
 	}
 
-	return db, nil
+	return &Database{FromMaster: db}, nil
+}
+
+type Database struct {
+	FromMaster *sql.DB
 }
 
 type DBTX interface {

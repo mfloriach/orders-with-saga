@@ -75,9 +75,11 @@ func (w *Worker) poll(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get pending outbox payments: %w", err)
 	}
+
 	for _, row := range rows {
 		w.process(ctx, row)
 	}
+
 	return nil
 }
 

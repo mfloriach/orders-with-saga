@@ -1,7 +1,7 @@
 package workflow
 
 import (
-	"database/sql"
+	"paymentgateway/internal/config"
 	"paymentgateway/internal/domain"
 	"paymentgateway/internal/notifications/email"
 	"paymentgateway/pkg/apiclient"
@@ -20,7 +20,7 @@ func NewWorkflow(
 	merchants MerchantLookup,
 	client *apiclient.Client,
 	emailSender email.Senders,
-	db *sql.DB,
+	db *config.Database,
 	outbox domain.OutBoxPaymentRepository,
 ) *saga.Saga[PaymentWorkflow] {
 	authorize := authorize{Payments: payments, CardNetwork: cardNetwork}

@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"paymentgateway/internal/config"
@@ -13,7 +12,7 @@ type capture struct {
 	Payments    domain.PaymentRepository
 	CardNetwork domain.CardNetwork
 	Outbox      domain.OutBoxPaymentRepository
-	Db          *sql.DB
+	Db          *config.Database
 }
 
 func (a capture) Name() string { return "capture" }
@@ -28,7 +27,7 @@ func (a capture) Do(ctx context.Context, wf *PaymentWorkflow) error {
 		return fmt.Errorf("card network capture failed paymentID: %s", p.ID)
 	}
 
-	return config.WithinTx(ctx, a.Db, func(txCtx context.Context) error {
+	return config.WithinTx(ctx, a.Db.FromMaster, func(txCtx context.Context) error {
 		pCaptured, err := a.Payments.Captured(txCtx, p)
 		if err != nil {
 			return fmt.Errorf("could not update payment status to captured paymentID: %s", p.ID)

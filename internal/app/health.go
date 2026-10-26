@@ -42,8 +42,8 @@ func readyHandler(checks map[string]func(ctx context.Context) error) fiber.Handl
 // readyChecks wires the container's pools into named checks.
 func readyChecks(cnt *Container) map[string]func(ctx context.Context) error {
 	return map[string]func(ctx context.Context) error{
-		"app_db":    cnt.AppDB.PingContext,
-		"ledger_db": cnt.LedgerDB.PingContext,
+		"app_db":    cnt.AppDB.FromMaster.PingContext,
+		"ledger_db": cnt.LedgerDB.FromMaster.PingContext,
 		"redis":     func(ctx context.Context) error { return cnt.Redis.Ping(ctx).Err() },
 		"rabbitmq":  func(ctx context.Context) error { return cnt.Broker.Ping(ctx) },
 	}
